@@ -11,7 +11,7 @@ Sheet inside that folder.)
 ## 2. Add the backend code
 1. In the Sheet, open the menu **Extensions → Apps Script**. A code editor opens.
 2. Delete what is in `Code.gs`, then paste in all of [`google-apps-script/Code.gs`](Code.gs).
-   (A copy named **Code.gs — paste into Apps Script** is also in the Drive folder.)
+   On GitHub, open the file and click the **Copy raw file** button (two squares icon) to copy all of it.
 3. Click **Save** (disk icon).
 
 `appsscript.json` is optional: the code sets the Manila time zone itself.

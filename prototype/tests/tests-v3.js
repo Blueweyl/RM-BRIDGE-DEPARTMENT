@@ -1,0 +1,95 @@
+(async () => {
+  const R = []; window.__R = R;
+  const tick = () => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); });
+  const sleep = async ms => { if (ms > 500) return new Promise(r => setTimeout(r, ms)); for (let i = 0; i < 6; i++) await tick(); };
+  const all = () => [...document.querySelectorAll('button,label')];
+  const btn = t => all().find(b => b.textContent.trim() === t);
+  const btnInc = t => all().find(b => b.textContent.includes(t));
+  const nav = t => { const b = [...document.querySelectorAll('nav button')].find(b => b.textContent.trim() === t); b && b.click(); };
+  const ok = (n, c, d) => R.push((c ? 'PASS  ' : 'FAIL  ') + n + (d ? '  [' + d + ']' : ''));
+  const txt = () => document.body.innerText;
+  const pin = async p => { for (const d of p) { const k = [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Digit ' + d); k.click(); await sleep(80); } await sleep(250); };
+  const d0 = new Date(); const today = d0.getFullYear() + '-' + String(d0.getMonth() + 1).padStart(2, '0') + '-' + String(d0.getDate()).padStart(2, '0');
+  const stick = () => [...document.querySelectorAll('div')].filter(d => d.style.position === 'sticky' && d.style.bottom === '0px')[0].getBoundingClientRect();
+  const setVal = (el, v) => { const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
+  try {
+    const mode = window.__MODE || 'main';
+    if (mode === 'main') {
+      nav('Login'); await sleep(300);
+      ok('PIN keys labelled (11)', document.querySelectorAll('button[aria-label^="Digit"],button[aria-label="Delete last digit"]').length === 11);
+      await pin('9999'); ok('Wrong PIN 9999 shows error', txt().includes('Wrong PIN')); await sleep(900);
+      ok('Wrong PIN clears entry', !txt().includes('Wrong PIN'));
+      const roles = [['0000', 'Operations Admin', 'All teams'], ['1111', 'Pijay Tanjeco', 'Bridge RM_Team 1'], ['2222', 'Glenn Butiong', 'Segment 10 Scupper Drain'], ['3333', 'Allan Miranda', 'Bridge Epoxy 1'], ['4444', 'Gilbert Rivera', 'Bridge Epoxy 2']];
+      for (const [p, n, t] of roles) { await pin(p); const x = txt(); ok('PIN ' + p + ' -> ' + n, x.includes('PIN accepted') && x.includes(n) && x.includes(t)); btnInc('Not you?').click(); await sleep(250); }
+      await pin('3333'); btnInc('Start today').click(); await sleep(400); ok('Continue opens Epoxy 1 screen', txt().includes('Leadman · Bridge Epoxy 1'));
+      const q = s => document.querySelectorAll(s).length;
+      ok('Tabs role=tab + aria-label (3)', q('[role=tab][aria-label]') === 3); ok('Progress listitems labelled (4)', q('[role=listitem][aria-label]') === 4);
+      ok('Status chip labelled', !!document.querySelector('[aria-label^="Report status"]')); ok('Photo controls labelled', q('[aria-label*="photo"]') >= 2);
+      btn('Submit report').click(); await sleep(500);
+      let e = document.getElementById('act-errors');
+      ok('Submit blocked when attendance missing', !!e && e.innerText.includes('attendance')); ok('Error list role=alert', !!e && e.getAttribute('role') === 'alert');
+      ok('Ongoing: After photo NOT required', !!e && !e.innerText.includes('After Work'));
+      await sleep(500);
+      const tb = document.querySelector('[role=tablist]').getBoundingClientRect(), bar = stick(), er = e.getBoundingClientRect();
+      ok('Error list visible (not under tabs/bottom bar)', er.top >= tb.bottom - 1 && er.top < bar.top, 'err ' + Math.round(er.top) + ' tabs ' + Math.round(tb.bottom) + ' bar ' + Math.round(bar.top));
+      btn('Complete').click(); await sleep(250); btn('Submit report').click(); await sleep(400);
+      e = document.getElementById('act-errors'); ok('Complete: After photo required', !!e && e.innerText.includes('After Work'));
+      btn('Ongoing').click(); await sleep(1700);
+      window.scrollTo(0, document.documentElement.scrollHeight); await sleep(300);
+      const ph = [...document.querySelectorAll('[aria-label*="photo"]')].pop().getBoundingClientRect(), bar2 = stick();
+      ok('Photo controls clear of bottom bar at page end', ph.bottom <= bar2.top + 1, 'photo ' + Math.round(ph.bottom) + ' bar ' + Math.round(bar2.top)); window.scrollTo(0, 0);
+      nav('Segment 10'); await sleep(500);
+      const c = document.createElement('canvas'); c.width = 40; c.height = 30; c.getContext('2d').fillRect(0, 0, 40, 30);
+      const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      const f = new File([blob], 'AFTER_WORK_SEGMENT10_KM11_000_TO_KM10_020_C3_EXIT_RAMP_SCUPPER_DRAIN_FINAL_PHOTO_2026.png', { type: 'image/png' });
+      const inp = document.querySelector('label[aria-label="Upload After Work photo"] input');
+      const dt = new DataTransfer(); dt.items.add(f); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); await sleep(1200);
+      const nm = [...document.querySelectorAll('span')].find(s => s.textContent.startsWith('AFTER_WORK_SEGMENT10'));
+      ok('Long filename truncated (ellipsis)', !!nm && nm.scrollWidth > nm.clientWidth, nm ? nm.clientWidth + 'px box' : 'not found');
+      ok('No page overflow after long filename', document.documentElement.scrollWidth <= window.innerWidth);
+      const rm = document.querySelector('button[aria-label="Remove After Work photo"]'); rm && rm.click(); await sleep(400);
+      ok('Test photo removed (state restored)', !!document.querySelector('label[aria-label="Upload After Work photo"]'));
+      nav('Admin'); await sleep(500);
+      let cap = null; const orig = URL.createObjectURL; URL.createObjectURL = b => { cap = b; return orig.call(URL, b); };
+      const oc = HTMLAnchorElement.prototype.click; let dl = null; HTMLAnchorElement.prototype.click = function () { dl = this.download; };
+      btnInc('Export CSV').click(); await sleep(400); URL.createObjectURL = orig; HTMLAnchorElement.prototype.click = oc;
+      const csv = cap ? await cap.text() : ''; const csvBytes = cap ? new Uint8Array(await cap.slice(0, 3).arrayBuffer()) : [];
+      const parse = s => { const out = []; let row = [], fl = '', qq = false; for (let i = 0; i < s.length; i++) { const ch = s[i]; if (qq) { if (ch == '"' && s[i + 1] == '"') { fl += '"'; i++; } else if (ch == '"') qq = false; else fl += ch; } else if (ch == '"') qq = true; else if (ch == ',') { row.push(fl); fl = ''; } else if (ch == '\r') { } else if (ch == '\n') { row.push(fl); out.push(row); row = []; fl = ''; } else fl += ch; } row.push(fl); out.push(row); return out; };
+      const rows = parse(csv.replace(/^\ufeff/, '')); const head = rows.shift();
+      ok('CSV blob created + download triggered', !!cap && dl === 'NLEX_Daily_Report_' + today + '.csv', dl || 'none');
+      ok('CSV BOM for Excel', csvBytes[0] === 0xef && csvBytes[1] === 0xbb && csvBytes[2] === 0xbf); ok('CSV header 19 columns', head.length === 19, String(head.length));
+      ok('Every row 19 columns', rows.every(r => r.length === 19), rows.length + ' rows');
+      ok("Today's 4 team rows", rows.filter(r => r[0] === today).length === 4);
+      ok('History rows (fixed dates)', rows.filter(r => r[0] === '2026-09-26').length === 4 && rows.filter(r => r[0] === '2026-09-23').length === 4);
+      ok('Absence reasons', csv.includes('Rocky Miranda (Sick)') && csv.includes('Rolando Faustino (No show)'));
+      ok('Draft values (Epoxy 2 remarks)', csv.includes('re-erected at pier 110-111'));
+      const r1 = rows.find(r => r[0] === today && r[1] === 'Bridge RM_Team 1'); ok('Submit time (RM Team 1)', !!r1 && /\d:\d\d/.test(r1[18]), r1 ? r1[18] : '');
+      const r3 = rows.find(r => r[0] === today && r[1] === 'Bridge Epoxy 1'); ok('Missing attendance flagged', !!r3 && r3[12] === 'Not submitted' && r3[17] === 'Missing Attendance');
+      ok('Export message honest ("requested")', txt().includes('Download requested')); ok('Copy CSV fallback shown', !!btn('Copy CSV'));
+      const imp = btnInc('Coming soon'); ok('Import disabled + Coming soon', !!imp && imp.disabled);
+      // Draft + lock setup before reload
+      nav('Epoxy 2'); await sleep(400);
+      const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder.startsWith('Issues')); window.__origRemarks = ta.value;
+      localStorage.setItem('bnlex.v3.__qa_orig', ta.value);
+      setVal(ta, ta.value + ' [QA-DRAFT]'); await sleep(1800);
+      ok('Autosave line shows saved', txt().includes('Saved on this phone'));
+      nav('RM Team 1'); await sleep(400);
+      btn('Edit report').click(); await sleep(400);
+      ok('Edit report unlocks fields', !document.querySelector('fieldset').disabled);
+      btn('Submit report').click(); await sleep(500);
+      ok('Resubmit locks again', document.querySelector('fieldset').disabled && txt().includes('Report submitted at'));
+    } else {
+      nav('Epoxy 2'); await sleep(500);
+      const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder.startsWith('Issues'));
+      ok('Draft survives reload', ta.value.includes('[QA-DRAFT]'), ta.value.slice(-30));
+      const orig = localStorage.getItem('bnlex.v3.__qa_orig'); setVal(ta, orig || ta.value.replace(' [QA-DRAFT]', '')); await sleep(1800);
+      localStorage.removeItem('bnlex.v3.__qa_orig');
+      ok('Test draft text reverted', !ta.value.includes('[QA-DRAFT]'));
+      nav('RM Team 1'); await sleep(500);
+      ok('Submitted report still locked after reload', document.querySelector('fieldset').disabled && txt().includes('Report submitted at'));
+      const photoBtns = [...document.querySelectorAll('[aria-label$="photo, locked"]')];
+      ok('Locked photo buttons marked + greyed', photoBtns.length >= 2 && photoBtns.every(b => b.style.cursor === 'not-allowed' || getComputedStyle(b).cursor === 'not-allowed'));
+    }
+  } catch (err) { R.push('ERROR ' + err.message); }
+  R.push('DONE');
+})();

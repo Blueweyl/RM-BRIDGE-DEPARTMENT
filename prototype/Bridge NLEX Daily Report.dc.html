@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <style>
+    body { margin:0; background:#E9ECF1; font-family:'Source Sans 3',sans-serif; color:#0F2540; -webkit-tap-highlight-color:transparent; }
+    * { box-sizing:border-box; }
+    input, select, textarea, button { font-family:'Source Sans 3',sans-serif; }
+    input:focus, textarea:focus, select:focus { outline:3px solid #F2A65A; outline-offset:0; border-color:#E8760F; }
+    fieldset[disabled] input, fieldset[disabled] textarea { background:#EEF1F4 !important; color:#33404F; border-color:#DDE2E8 !important; cursor:not-allowed; }
+    html { scroll-padding-top:120px; scroll-padding-bottom:120px; }
+    a { color:#0F2540; } a:hover { color:#E8760F; }
+  </style>
+</helmet>
+
+<sc-if value="{{ showNav }}" hint-placeholder-val="{{ true }}">
+<nav aria-label="Prototype screen jumper — not part of the real app" style="position:sticky;top:0;z-index:60;height:52px;background:#0A1B30;display:flex;align-items:center;gap:6px;padding:0 12px;overflow-x:auto;border-bottom:2px dashed #F2A65A;">
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#F2A65A;letter-spacing:1px;text-transform:uppercase;white-space:nowrap;margin-right:4px;">Prototype only ›</span>
+  <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="6">
+    <button onClick="{{ n.go }}" style="{{ n.style }}">{{ n.label }}</button>
+  </sc-for>
+</nav>
+</sc-if>
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+  <div style="min-height:calc(100vh - 52px);background:#0F2540;display:flex;align-items:center;justify-content:center;padding:28px 16px;">
+    <div style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:20px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:44px;height:44px;background:#E8760F;border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-weight:800;font-size:22px;color:#0F2540;flex:none;">S</div>
+        <div>
+          <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:20px;color:#FFFFFF;letter-spacing:0.3px;line-height:1.1;">Bridge NLEX Daily Report</div>
+          <div style="font-size:13px;color:#AFC0D6;font-weight:600;">Savvice · NLEX Maintenance</div>
+        </div>
+      </div>
+
+      <div style="background:#FFFFFF;border-radius:16px;padding:26px 22px;box-shadow:0 20px 50px rgba(0,0,0,0.35);">
+        <sc-if value="{{ login.entering }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+            <div style="text-align:center;">
+              <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:20px;color:#0F2540;">Enter your 4-digit PIN</div>
+              <div style="font-size:14px;color:#5B6472;margin-top:4px;">{{ todayLong }}</div>
+            </div>
+            <div style="display:flex;gap:16px;">
+              <sc-for list="{{ login.dots }}" as="d" hint-placeholder-count="4">
+                <div style="{{ d.style }}"></div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ login.error }}" hint-placeholder-val="{{ false }}">
+              <div role="alert" style="background:#FBE0DD;color:#A8261B;font-weight:700;font-size:14px;padding:8px 14px;border-radius:8px;text-align:center;white-space:nowrap;">Wrong PIN. Please try again.</div>
+            </sc-if>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%;">
+              <sc-for list="{{ login.keys }}" as="k" hint-placeholder-count="12">
+                <button onClick="{{ k.press }}" aria-label="{{ k.aria }}" style="{{ k.style }}">{{ k.label }}</button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ login.confirmed }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;">
+            <div style="width:72px;height:72px;border-radius:50%;background:#0F2540;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-weight:800;font-size:26px;">{{ login.user.initials }}</div>
+            <div>
+              <div style="font-size:14px;color:#17693F;font-weight:700;">✓ PIN accepted</div>
+              <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:22px;color:#0F2540;margin-top:4px;">{{ login.user.name }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;width:100%;background:#F2F4F7;border-radius:10px;padding:12px 14px;text-align:left;">
+              <div style="display:flex;justify-content:space-between;gap:10px;font-size:14px;"><span style="color:#5B6472;">Role</span><span style="font-weight:700;">{{ login.user.role }}</span></div>
+              <div style="display:flex;justify-content:space-between;gap:10px;font-size:14px;"><span style="color:#5B6472;">Team</span><span style="font-weight:700;text-align:right;">{{ login.user.team }}</span></div>
+              <div style="display:flex;justify-content:space-between;gap:10px;font-size:14px;"><span style="color:#5B6472;">Date</span><span style="font-weight:700;">{{ todayLong }}</span></div>
+            </div>
+            <button onClick="{{ login.proceed }}" style="width:100%;min-height:56px;background:#E8760F;color:#FFFFFF;border:none;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;">{{ login.user.cta }}</button>
+            <button onClick="{{ login.reset }}" style="background:none;border:none;color:#2B4A73;font-size:14px;font-weight:700;text-decoration:underline;cursor:pointer;min-height:44px;">Not you? Enter a different PIN</button>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="background:#1B3A63;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#AFC0D6;letter-spacing:1px;text-transform:uppercase;">Demo PINs</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;color:#FFFFFF;">
+          <span>0000 · Admin</span><span>1111 · RM Team 1</span><span>2222 · Segment 10</span><span>3333 · Epoxy 1</span><span>4444 · Epoxy 2</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:1400px;margin:0 auto;padding:20px 16px 60px;display:flex;flex-direction:column;gap:18px;">
+    <div style="background:#0F2540;border-radius:14px;padding:18px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;">
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#F2A65A;letter-spacing:1.5px;text-transform:uppercase;">Operations Command</div>
+        <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:24px;color:#FFFFFF;margin-top:2px;">Today · {{ todayLong }}</div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button type="button" disabled="{{ true }}" aria-disabled="true" aria-label="Import Excel, coming soon" title="Coming soon" style="white-space:nowrap;min-height:44px;background:transparent;border:1.5px dashed #5E7593;color:#AFC0D6;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:not-allowed;">Import Excel · Coming soon</button>
+        <button onClick="{{ admin.onExport }}" aria-label="Download report as CSV file for Excel" style="white-space:nowrap;min-height:44px;background:#E8760F;border:none;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:pointer;">Export CSV (Excel)</button>
+        <button onClick="{{ admin.resetDemo }}" style="white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;">Reset demo data</button>
+        <button onClick="{{ logout }}" style="white-space:nowrap;min-height:44px;background:#1B3A63;border:none;color:#FFFFFF;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;">Log out</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 14px;background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:10px 14px;">
+      <span style="{{ admin.storageStyle }}">{{ admin.storageLine }}</span>
+      <sc-if value="{{ admin.hasExport }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:13px;color:#33404F;overflow-wrap:anywhere;">{{ admin.exportLine }}</span>
+          <button onClick="{{ admin.copyCsv }}" aria-label="Copy last export as CSV text" style="min-height:44px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:8px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">Copy CSV</button>
+        </div>
+      </sc-if>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+      <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#5B6472;">Manpower on site</div>
+        <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:40px;line-height:1;">{{ kpi.manpower }}</span><span style="font-size:15px;color:#5B6472;font-weight:600;">/ {{ kpi.planned }} planned</span></div>
+        <div style="height:6px;border-radius:3px;background:#E7EAEF;overflow:hidden;"><div style="{{ kpi.manBar }}"></div></div>
+      </div>
+      <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#5B6472;">Jobs completed</div>
+        <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:40px;line-height:1;">{{ kpi.completed }}</span><span style="font-size:15px;color:#5B6472;font-weight:600;">{{ kpi.ongoingLabel }}</span></div>
+      </div>
+      <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#5B6472;">Active crews</div>
+        <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:40px;line-height:1;">{{ kpi.active }}</span><span style="font-size:15px;color:#5B6472;font-weight:600;">of 4 teams</span></div>
+      </div>
+      <div style="{{ kpi.pendingCard }}">
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#8A4B00;">Pending submissions</div>
+        <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:40px;line-height:1;color:#0F2540;">{{ kpi.pending }}</span><span style="font-size:15px;color:#6B3A00;font-weight:600;">need follow-up</span></div>
+      </div>
+    </div>
+
+    <sc-if value="{{ admin.hasPending }}" hint-placeholder-val="{{ true }}">
+      <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+        <div style="font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;">Needs attention</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:8px;">
+          <sc-for list="{{ admin.pending }}" as="p" hint-placeholder-count="3">
+            <button onClick="{{ p.open }}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:56px;background:#F7F8FA;border:1px solid #DDE2E8;border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;">
+              <span style="display:flex;flex-direction:column;gap:2px;min-width:0;">
+                <span style="font-weight:700;font-size:14px;color:#0F2540;">{{ p.team }}</span>
+                <span style="font-size:13px;color:#5B6472;">{{ p.leadman }} · {{ p.note }}</span>
+              </span>
+              <span style="{{ p.chipStyle }}">{{ p.chip }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ admin.allDone }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#DDF2E6;color:#17693F;border-radius:12px;padding:14px 16px;font-weight:700;font-size:15px;">✓ All 4 teams have submitted attendance and activity reports today.</div>
+    </sc-if>
+
+    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;">
+      <sc-for list="{{ admin.tabs }}" as="at" hint-placeholder-count="5">
+        <button onClick="{{ at.select }}" style="{{ at.style }}">
+          <span style="font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;">{{ at.label }}</span>
+          <span style="{{ at.subStyle }}">{{ at.sub }}</span>
+          <sc-if value="{{ at.hasChip }}" hint-placeholder-val="{{ true }}"><span aria-label="{{ at.chipAria }}" style="{{ at.chipStyle }}">{{ at.chip }}</span></sc-if>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;overflow:hidden;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #DDE2E8;flex-wrap:wrap;">
+        <div style="font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;">{{ admin.tableTitle }}</div>
+        <div style="font-size:13px;color:#5B6472;">Scroll sideways for all columns →</div>
+      </div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+        <div style="min-width:1320px;">
+          <div style="display:grid;grid-template-columns:200px 90px 210px minmax(280px,1fr) 110px 110px 120px 80px 160px;background:#0F2540;">
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Team / Leadman</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Date</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Location</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Activity Details</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Status</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Target / Actual</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Manpower</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Photos</div>
+            <div style="padding:11px 14px;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:11px;letter-spacing:0.6px;text-transform:uppercase;">Report</div>
+          </div>
+          <sc-for list="{{ admin.rows }}" as="row" hint-placeholder-count="4">
+            <div style="{{ row.rowStyle }}">
+              <div style="padding:12px 14px;display:flex;flex-direction:column;gap:2px;"><span style="font-weight:700;font-size:14px;">{{ row.team }}</span><span style="font-size:13px;color:#5B6472;">{{ row.leadman }}</span></div>
+              <div style="padding:12px 14px;font-size:14px;">{{ row.date }}</div>
+              <div style="padding:12px 14px;font-size:14px;font-weight:700;">{{ row.location }}</div>
+              <div style="{{ row.detailsStyle }}">{{ row.details }}</div>
+              <div style="padding:12px 14px;"><sc-if value="{{ row.hasStatus }}" hint-placeholder-val="{{ true }}"><span style="{{ row.statusStyle }}">{{ row.statusLabel }}</span></sc-if></div>
+              <div style="padding:12px 14px;font-size:14px;">{{ row.targetActual }}</div>
+              <div style="padding:12px 14px;font-size:14px;">{{ row.manpower }}</div>
+              <div style="padding:12px 14px;font-size:14px;">{{ row.photos }}</div>
+              <div style="padding:12px 14px;"><span style="{{ row.reportStyle }}">{{ row.reportLabel }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <sc-if value="{{ admin.hasRoster }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
+          <div style="font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;">Crew roster — {{ admin.roster.name }}</div>
+          <div style="font-size:13px;color:#5B6472;">{{ admin.roster.count }} people</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input type="text" placeholder="New crew member full name" value="{{ admin.roster.newVal }}" onChange="{{ admin.roster.onNew }}" onKeyDown="{{ admin.roster.onKey }}" style="flex:1 1 240px;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;">
+          <button onClick="{{ admin.roster.add }}" style="min-height:48px;background:#0F2540;color:#FFFFFF;border:none;border-radius:8px;padding:0 18px;font-weight:700;font-size:15px;cursor:pointer;">+ Add to crew</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr));gap:8px;">
+          <sc-for list="{{ admin.roster.members }}" as="m" hint-placeholder-count="8">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:#F7F8FA;border:1px solid #E4E8ED;border-radius:10px;padding:8px 8px 8px 12px;min-height:52px;">
+              <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                <span style="{{ m.roleTagStyle }}">{{ m.role }}</span>
+                <span style="font-size:14px;font-weight:600;">{{ m.name }}</span>
+              </div>
+              <sc-if value="{{ m.removable }}" hint-placeholder-val="{{ true }}">
+                <button onClick="{{ m.remove }}" aria-label="{{ m.removeAria }}" style="{{ m.removeStyle }}">{{ m.removeLabel }}</button>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ admin.roster.hasArchived }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid #E7EAEF;padding-top:12px;">
+            <span style="font-size:13px;font-weight:700;color:#33404F;">Archived — removed crew (attendance records kept)</span>
+            <sc-for list="{{ admin.roster.archived }}" as="r" hint-placeholder-count="1">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:#F7F8FA;border:1px dashed #C9D1DB;border-radius:10px;padding:8px 8px 8px 12px;">
+                <span style="font-size:14px;color:#33404F;"><b>{{ r.name }}</b> · {{ r.meta }}</span>
+                <button onClick="{{ r.restore }}" aria-label="{{ r.aria }}" style="min-height:44px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:8px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;">Restore</button>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+  </div>
+</sc-if>
+
+<sc-if value="{{ isTeam }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:560px;margin:0 auto;background:#F4F6F9;min-height:calc(100vh - 52px);box-shadow:0 0 0 1px #DDE2E8;">
+    <div style="background:#0F2540;padding:16px 16px 14px;display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:48px;height:48px;border-radius:50%;background:#E8760F;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-weight:800;color:#0F2540;font-size:17px;flex:none;">{{ cur.initials }}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;color:#FFFFFF;">{{ cur.leadman }}</div>
+          <div style="font-size:14px;color:#C5D2E2;">Leadman · {{ cur.name }}</div>
+        </div>
+        <button onClick="{{ logout }}" style="min-height:44px;background:#1B3A63;border:none;color:#FFFFFF;font-weight:700;font-size:13px;padding:0 12px;border-radius:8px;cursor:pointer;flex:none;">Log out</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <span style="font-size:14px;color:#FFFFFF;font-weight:600;">{{ todayLong }}</span>
+        <span role="status" aria-label="{{ cur.chipAria }}" style="{{ cur.chipStyle }}">{{ cur.chip }}</span>
+      </div>
+      <div role="list" aria-label="Report progress" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;">
+        <sc-for list="{{ cur.steps }}" as="st" hint-placeholder-count="4">
+          <div role="listitem" aria-label="{{ st.aria }}" style="display:flex;flex-direction:column;gap:5px;min-width:0;">
+            <div aria-hidden="true" style="{{ st.bar }}"></div>
+            <span style="{{ st.labelStyle }}">{{ st.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div role="tablist" aria-label="Report sections" style="{{ tabsBarStyle }}">
+      <sc-for list="{{ cur.tabs }}" as="tb" hint-placeholder-count="3">
+        <button role="tab" aria-selected="{{ tb.selected }}" aria-label="{{ tb.aria }}" onClick="{{ tb.go }}" style="{{ tb.style }}">
+          {{ tb.label }}
+          <sc-if value="{{ tb.dot }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#C62828;display:inline-block;"></span></sc-if>
+        </button>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{ cur.onActivity }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:14px 14px 20px;display:flex;flex-direction:column;gap:14px;">
+        <sc-if value="{{ cur.actDone }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#DDF2E6;border:1px solid #A9DBBF;color:#17693F;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:2px;">
+            <span style="font-weight:800;font-size:16px;">{{ cur.reportSubmittedLabel }}</span>
+            <span style="font-size:14px;">Fields are locked and saved on this phone. Tap Edit report below to make changes.</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ cur.showActErr }}" hint-placeholder-val="{{ false }}">
+          <div id="act-errors" role="alert" style="background:#FBE0DD;border:1px solid #EDB3AC;color:#7E1C13;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;">
+            <span style="font-weight:800;font-size:16px;">Can't submit yet. Please fix:</span>
+            <sc-for list="{{ cur.missing }}" as="mi" hint-placeholder-count="2">
+              <span style="font-size:14px;font-weight:600;">• {{ mi.label }}</span>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <fieldset disabled="{{ cur.locked }}" style="border:none;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:14px;">
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:26px;height:26px;border-radius:50%;background:#0F2540;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">1</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;">When &amp; where</span></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 10px;min-height:44px;padding:8px 12px;border-radius:8px;background:#EEF1F4;">
+              <span style="font-size:13px;font-weight:700;color:#33404F;">Date (auto-filled)</span>
+              <span style="font-size:15px;font-weight:700;color:#0F2540;">{{ todayLong }}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">From
+                <input type="time" value="{{ cur.form.from }}" onChange="{{ cur.set.from }}" style="width:100%;min-height:48px;padding:0 8px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">To
+                <input type="time" value="{{ cur.form.to }}" onChange="{{ cur.set.to }}" style="width:100%;min-height:48px;padding:0 8px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;">
+              </label>
+            </div>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Location
+              <input type="text" placeholder="e.g. CANDABA VIADUCT North bound" value="{{ cur.form.location }}" onChange="{{ cur.set.location }}" style="{{ cur.fs.location }}">
+            </label>
+          </div>
+
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:26px;height:26px;border-radius:50%;background:#0F2540;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">2</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;">Work done</span></div>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Activity details
+              <textarea rows="3" placeholder="What did the crew do today?" value="{{ cur.form.details }}" onChange="{{ cur.set.details }}" style="{{ cur.fs.details }}"></textarea>
+            </label>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <span style="font-size:13px;font-weight:700;color:#33404F;">Status</span>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <button type="button" aria-pressed="{{ cur.isOngoing }}" onClick="{{ cur.setOngoing }}" style="{{ cur.ongoingStyle }}">Ongoing</button>
+                <button type="button" aria-pressed="{{ cur.isComplete }}" onClick="{{ cur.setComplete }}" style="{{ cur.completeStyle }}">Complete</button>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Target (KM / locations)
+                <input type="number" inputMode="decimal" value="{{ cur.form.targetLoc }}" onChange="{{ cur.set.targetLoc }}" style="width:100%;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:18px;font-weight:700;color:#0F2540;background:#FFFFFF;">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Actual (KM / locations)
+                <input type="number" inputMode="decimal" value="{{ cur.form.actualLoc }}" onChange="{{ cur.set.actualLoc }}" style="width:100%;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:18px;font-weight:700;color:#0F2540;background:#FFFFFF;">
+              </label>
+            </div>
+          </div>
+
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:26px;height:26px;border-radius:50%;background:#0F2540;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">3</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;">Manpower &amp; equipment</span></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Target manpower
+                <input type="number" inputMode="numeric" value="{{ cur.form.targetMH }}" onChange="{{ cur.set.targetMH }}" style="width:100%;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:18px;font-weight:700;color:#0F2540;background:#FFFFFF;">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Actual manpower
+                <input type="number" inputMode="numeric" value="{{ cur.form.actualMH }}" onChange="{{ cur.set.actualMH }}" style="{{ cur.fs.actualMH }}">
+              </label>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;background:#F2F4F7;border-radius:8px;padding:8px 10px;">
+              <span style="font-size:14px;color:#33404F;">Attendance shows <b>{{ cur.presentCount }} present</b></span>
+              <button type="button" aria-label="Set actual manpower to attendance present count" onClick="{{ cur.useAttendance }}" style="{{ cur.useBtnStyle }}">Use this number</button>
+            </div>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:#33404F;">Equipment / plate number
+              <input type="text" placeholder="e.g. NCG 5500" value="{{ cur.form.plate }}" onChange="{{ cur.set.plate }}" style="{{ cur.fs.plate }}">
+            </label>
+          </div>
+
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:26px;height:26px;border-radius:50%;background:#0F2540;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">4</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;">Remarks</span><span style="font-size:13px;color:#5B6472;">(optional)</span></div>
+            <textarea rows="2" placeholder="Issues, delays, materials needed…" value="{{ cur.form.remarks }}" onChange="{{ cur.set.remarks }}" style="width:100%;min-height:72px;padding:12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;resize:vertical;line-height:1.4;"></textarea>
+          </div>
+
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;align-items:center;gap:8px;"><span style="width:26px;height:26px;border-radius:50%;background:#0F2540;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">5</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;">Site photos</span></div>
+            <sc-if value="{{ cur.storageWarn }}" hint-placeholder-val="{{ false }}">
+              <div role="alert" style="background:#FDEBD3;border:1px solid #F3C98F;color:#6B3A00;border-radius:8px;padding:8px 10px;font-size:14px;font-weight:700;">{{ cur.storageHint }}</div>
+            </sc-if>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+              <sc-for list="{{ cur.photoList }}" as="ph" hint-placeholder-count="2">
+                <div style="display:flex;flex-direction:column;gap:8px;min-width:0;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                    <span style="font-size:15px;font-weight:800;">{{ ph.label }}</span>
+                    <span style="{{ ph.reqStyle }}">{{ ph.reqLabel }}</span>
+                  </div>
+                  <sc-if value="{{ ph.empty }}" hint-placeholder-val="{{ true }}">
+                    <label aria-label="{{ ph.takeAria }}" style="{{ ph.dropStyle }}">
+                      <input type="file" accept="image/*" onChange="{{ ph.onFile }}" style="display:none;">
+                      <span style="width:44px;height:44px;border-radius:50%;background:#0F2540;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;line-height:1;">+</span>
+                      <span style="font-size:15px;font-weight:800;color:#0F2540;">Upload photo</span>
+                      <span style="font-size:12px;color:#5B6472;text-align:center;">{{ ph.hint }}</span>
+                    </label>
+                  </sc-if>
+                  <sc-if value="{{ ph.filled }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:relative;height:150px;border-radius:10px;overflow:hidden;border:1px solid #C9D1DB;background:repeating-linear-gradient(45deg,#CDD5DF 0 8px,#DAE0E8 8px 16px);">
+                      <sc-if value="{{ ph.hasUrl }}" hint-placeholder-val="{{ false }}"><div style="{{ ph.previewStyle }}"></div></sc-if>
+                      <sc-if value="{{ ph.noUrl }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:#3C4858;">site photo</div></sc-if>
+                      <span style="position:absolute;left:8px;top:8px;background:#17693F;color:#FFFFFF;font-size:12px;font-weight:700;padding:3px 8px;border-radius:6px;">✓ {{ ph.time }}</span>
+                    </div>
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#5B6472;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ ph.name }}</span>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                      <label aria-label="{{ ph.replaceAria }}" style="{{ ph.replaceStyle }}">
+                        <input type="file" accept="image/*" onChange="{{ ph.onFile }}" style="display:none;">
+                        Replace
+                      </label>
+                      <button type="button" onClick="{{ ph.remove }}" aria-label="{{ ph.removeAria }}" style="{{ ph.removeStyle }}">Remove</button>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </fieldset>
+      </div>
+      <div style="position:sticky;bottom:0;z-index:30;background:#FFFFFF;border-top:1px solid #DDE2E8;padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -6px 18px rgba(15,37,64,0.08);">
+        <sc-if value="{{ cur.actOpen }}" hint-placeholder-val="{{ true }}">
+          <div role="status" aria-live="polite" style="{{ cur.saveLineStyle }}">{{ cur.saveLine }}</div>
+          <div style="display:flex;gap:10px;">
+          <button onClick="{{ cur.saveDraft }}" style="flex:1;min-height:56px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;cursor:pointer;">Save draft</button>
+          <button onClick="{{ cur.submitAct }}" style="flex:2;min-height:56px;background:#E8760F;border:none;color:#FFFFFF;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;">Submit report</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ cur.actDone }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;gap:10px;"><div style="flex:2;display:flex;align-items:center;font-weight:800;font-size:15px;color:#17693F;">{{ cur.submittedLabel }}</div>
+          <button onClick="{{ cur.editAct }}" style="flex:1;min-height:56px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;cursor:pointer;">Edit report</button></div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ cur.onAttendance }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:14px 14px 20px;display:flex;flex-direction:column;gap:12px;">
+        <sc-if value="{{ cur.attDone }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#DDF2E6;border:1px solid #A9DBBF;color:#17693F;border-radius:12px;padding:12px 14px;font-weight:700;font-size:15px;">{{ cur.attSubmittedLabel }}</div>
+        </sc-if>
+        <sc-if value="{{ cur.attOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#FDEBD3;border:1px solid #F3C98F;color:#6B3A00;border-radius:12px;padding:12px 14px;font-size:15px;"><b>Not submitted yet.</b> Admin sees this team as Missing Attendance.</div>
+        </sc-if>
+        <sc-if value="{{ cur.showAttErr }}" hint-placeholder-val="{{ false }}">
+          <div id="att-errors" role="alert" style="background:#FBE0DD;border:1px solid #EDB3AC;color:#7E1C13;border-radius:12px;padding:12px 14px;font-weight:700;font-size:15px;">Choose a reason for every absent crew member.</div>
+        </sc-if>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:12px 14px;flex-wrap:wrap;">
+          <div style="display:flex;gap:18px;">
+            <div style="display:flex;flex-direction:column;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:28px;color:#17693F;line-height:1;">{{ cur.presentCount }}</span><span style="font-size:13px;font-weight:700;color:#33404F;">Present</span></div>
+            <div style="display:flex;flex-direction:column;"><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:28px;color:#A8261B;line-height:1;">{{ cur.absentCount }}</span><span style="font-size:13px;font-weight:700;color:#33404F;">Absent</span></div>
+          </div>
+          <button onClick="{{ cur.markAll }}" style="min-height:48px;background:#0F2540;color:#FFFFFF;border:none;border-radius:10px;padding:0 16px;font-weight:700;font-size:15px;cursor:pointer;">Mark all present</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <sc-for list="{{ cur.people }}" as="m" hint-placeholder-count="8">
+            <div style="{{ m.rowStyle }}">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+                <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 140px;">
+                  <span style="font-size:16px;font-weight:700;">{{ m.name }}</span>
+                  <span style="{{ m.roleTagStyle }}">{{ m.role }}</span>
+                </div>
+                <div role="group" aria-label="{{ m.groupAria }}" style="display:flex;border:1.5px solid #C9D1DB;border-radius:10px;overflow:hidden;flex:none;margin-left:auto;">
+                  <button aria-pressed="{{ m.present }}" aria-label="{{ m.pAria }}" onClick="{{ m.setPresent }}" style="{{ m.pStyle }}">Present</button>
+                  <button aria-pressed="{{ m.absent }}" aria-label="{{ m.aAria }}" onClick="{{ m.setAbsent }}" style="{{ m.aStyle }}">Absent</button>
+                </div>
+              </div>
+              <sc-if value="{{ m.absent }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                  <span style="{{ m.reasonLabelStyle }}">Reason for absence</span>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    <sc-for list="{{ m.reasons }}" as="r" hint-placeholder-count="4">
+                      <button aria-pressed="{{ r.on }}" onClick="{{ r.pick }}" style="{{ r.style }}">{{ r.label }}</button>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="position:sticky;bottom:0;z-index:30;background:#FFFFFF;border-top:1px solid #DDE2E8;padding:12px 14px;box-shadow:0 -6px 18px rgba(15,37,64,0.08);">
+        <button onClick="{{ cur.submitAtt }}" style="width:100%;min-height:56px;background:#E8760F;border:none;color:#FFFFFF;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;">{{ cur.attBtn }}</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ cur.onHistory }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:14px 14px 28px;display:flex;flex-direction:column;gap:10px;">
+        <sc-for list="{{ cur.history }}" as="h" hint-placeholder-count="3">
+          <div style="background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span style="font-size:14px;font-weight:700;color:#33404F;">{{ h.date }}</span>
+              <span style="{{ h.statusStyle }}">{{ h.statusLabel }}</span>
+            </div>
+            <div style="font-family:'Archivo',sans-serif;font-weight:800;font-size:16px;">{{ h.location }}</div>
+            <div style="font-size:14px;color:#33404F;line-height:1.45;">{{ h.details }}</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;border-top:1px solid #E7EAEF;padding-top:10px;">
+              <div style="display:flex;flex-direction:column;gap:2px;"><span style="font-size:11px;font-weight:700;color:#5B6472;text-transform:uppercase;letter-spacing:0.5px;">Leadman</span><span style="font-size:13px;font-weight:700;">{{ h.leadman }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px;"><span style="font-size:11px;font-weight:700;color:#5B6472;text-transform:uppercase;letter-spacing:0.5px;">Crew present</span><span style="font-size:13px;font-weight:700;">{{ h.att }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px;"><span style="font-size:11px;font-weight:700;color:#5B6472;text-transform:uppercase;letter-spacing:0.5px;">Photos</span><span style="font-size:13px;font-weight:700;">{{ h.photos }}</span></div>
+            </div>
+          </div>
+        </sc-for>
+        <sc-if value="{{ cur.noToday }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1.5px dashed #C9D1DB;border-radius:12px;padding:14px;text-align:center;font-size:14px;color:#5B6472;">Today's report will appear here after you submit it.</div>
+        </sc-if>
+      </div>
+    </sc-if>
+  </div>
+</sc-if>
+
+<sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;left:16px;right:16px;bottom:92px;z-index:100;display:flex;justify-content:center;pointer-events:none;">
+    <div role="status" aria-live="polite" style="{{ toastStyle }}">{{ toastMsg }}</div>
+  </div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;login&quot;,&quot;admin&quot;,&quot;team1&quot;,&quot;team2&quot;,&quot;team3&quot;,&quot;team4&quot;],&quot;default&quot;:&quot;login&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;afterPhotoAlwaysRequired&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;prototypeNav&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  static T = [
+    { id: 'team1', short: 'RM Team 1', name: 'Bridge RM_Team 1', leadman: 'Pijay Tanjeco', pin: '1111',
+      crew: [['Justin Billones','Skilled'],['Ignacio Alcoriza Jr.','Crew'],['Alvin Angelo','Crew'],['Joven Blanza','Crew'],['Rocky Miranda','Crew'],['Richard Candelaria','Crew'],['Crisostomo Sebuc','Crew']],
+      absent: { 'Rocky Miranda': 'Sick' },
+      seed: { att: '6:58 AM', act: '3:42 PM', before: true, after: true },
+      form: { from: '07:00', to: '16:00', location: 'SAPANG BAGO RIVER BRIDGE', details: 'Parapet cleaning, Deck slab cleaning, Girder and pier cleaning, Slope protection cleaning, Grass cutting, Trimming trees', status: 'COMPLETE', targetLoc: '1', actualLoc: '1', plate: 'NFJ 6654', targetMH: '8', actualMH: '7', remarks: 'Area turned over clean. Tree trimmings hauled to stockpile.' },
+      history: [
+        { date: '2026-09-26', location: 'MABALACAT RIVER BRIDGE', details: 'Parapet cleaning, Grass cutting, Trimming trees', status: 'COMPLETE', att: '7/8', photos: 2 },
+        { date: '2026-09-25', location: 'STO. TOMAS RIVER BRIDGE', details: 'Deck slab cleaning, Slope protection cleaning', status: 'COMPLETE', att: '8/8', photos: 2 },
+        { date: '2026-09-23', location: 'PAMPANGA RIVER BRIDGE North bound', details: 'Girder and pier cleaning, Grass cutting', status: 'COMPLETE', att: '7/8', photos: 2 } ] },
+    { id: 'team2', short: 'Segment 10', name: 'Segment 10 Scupper Drain', leadman: 'Glenn Butiong', pin: '2222',
+      crew: [['Glen Jorick De Mesa','Skilled'],['Justine Gregg Baylon','Skilled'],['John Christian Bernardo','Crew'],['Ian Enriquez','Crew'],['Joanner Royce Quilao','Crew'],['Rolando Faustino','Crew'],['Richard Santiago','Crew'],['Abraham Balmeo','Crew']],
+      absent: { 'Abraham Balmeo': 'Leave', 'Rolando Faustino': 'No show' },
+      seed: { att: '7:05 AM', act: null, before: true, after: false },
+      form: { from: '07:00', to: '16:00', location: 'Km.11+000 to km.10+020 C3 exit ramp', details: 'Cleaning of clogged scupper drain', status: 'COMPLETE', targetLoc: '1', actualLoc: '1', plate: 'NKU 8624', targetMH: '8', actualMH: '7', remarks: 'After photo pending — crew still flushing the last scupper.' },
+      history: [
+        { date: '2026-09-26', location: 'Km.10+020 to Km.9+400 C3 exit ramp', details: 'Cleaning of clogged scupper drain', status: 'COMPLETE', att: '8/9', photos: 2 },
+        { date: '2026-09-25', location: 'Km.12+500 NB main line', details: 'Cleaning of clogged scupper drain, debris removal', status: 'COMPLETE', att: '9/9', photos: 2 },
+        { date: '2026-09-23', location: 'Km.9+400 to Km.8+800 C4 entry ramp', details: 'Cleaning of clogged scupper drain', status: 'ONGOING', att: '7/9', photos: 1 } ] },
+    { id: 'team3', short: 'Epoxy 1', name: 'Bridge Epoxy 1', leadman: 'Allan Miranda', pin: '3333',
+      crew: [['Elmer Dordulo','Skilled'],['Edwin Lozano','Skilled'],['R-Jay John Aquino','Crew'],['Mark Joseph De Guzman','Crew'],['Edbryan Dela Cruz','Crew'],['Mark Ian Dungca','Crew'],['Johnry Manese','Crew'],['Eroll Pangilinan','Crew']],
+      absent: { 'Eroll Pangilinan': 'Sick' },
+      seed: { att: null, act: null, before: true, after: false },
+      form: { from: '07:00', to: '17:00', location: 'CANDABA VIADUCT North bound', details: 'Inject epoxy girder 3-4-5, Pier 111-112', status: 'ONGOING', targetLoc: '3', actualLoc: '2', plate: 'NCG 5500', targetMH: '8', actualMH: '8', remarks: '' },
+      history: [
+        { date: '2026-09-26', location: 'CANDABA VIADUCT North bound', details: 'Inject epoxy girder 1-2, Pier 109-110', status: 'ONGOING', att: '9/9', photos: 2 },
+        { date: '2026-09-25', location: 'CANDABA VIADUCT South bound', details: 'Inject epoxy girder 6-7, Pier 113-114', status: 'COMPLETE', att: '8/9', photos: 2 },
+        { date: '2026-09-23', location: 'CANDABA VIADUCT South bound', details: 'Surface preparation, crack sealing', status: 'COMPLETE', att: '8/9', photos: 2 } ] },
+    { id: 'team4', short: 'Epoxy 2', name: 'Bridge Epoxy 2', leadman: 'Gilbert Rivera', pin: '4444',
+      crew: [['Alvin Galang','Skilled'],['Ivan Cabunag','Crew'],['AJ Enriquez','Crew'],['Jaypee Occidental','Crew'],['Edgar Ortillo','Crew'],['Voltaire Rotamula','Crew'],['Joshua Andrei Tayco','Crew']],
+      absent: { 'Voltaire Rotamula': 'Leave' },
+      seed: { att: '7:10 AM', act: null, before: true, after: true },
+      form: { from: '07:00', to: '17:00', location: 'CANDABA VIADUCT North bound', details: 'Dismantle remaining half of scaffolding, moving to pier 110-111', status: 'ONGOING', targetLoc: '2', actualLoc: '1', plate: 'NEO 5124', targetMH: '8', actualMH: '7', remarks: 'Scaffolding to be re-erected at pier 110-111 tomorrow.' },
+      history: [
+        { date: '2026-09-26', location: 'CANDABA VIADUCT North bound', details: 'Dismantle scaffolding pier 108-109', status: 'ONGOING', att: '7/8', photos: 2 },
+        { date: '2026-09-25', location: 'CANDABA VIADUCT North bound', details: 'Erect scaffolding pier 110-111', status: 'COMPLETE', att: '8/8', photos: 2 },
+        { date: '2026-09-23', location: 'CANDABA VIADUCT South bound', details: 'Dismantle remaining scaffolding pier 105-106', status: 'COMPLETE', att: '6/8', photos: 2 } ] },
+  ];
+  static REASONS = ['Sick', 'Leave', 'No show', 'Other'];
+  static CHIP = {
+    submitted: ['Submitted', '#DDF2E6', '#17693F'],
+    draft: ['Draft', '#E3E9F2', '#2B4A73'],
+    missing: ['Missing Attendance', '#FBE0DD', '#A8261B'],
+    photos: ['Needs Photos', '#FDEBD3', '#8A4B00'],
+  };
+
+  static K = 'bnlex.v3.';
+  dayKey() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  lsGet(k) { try { const v = localStorage.getItem(Component.K + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+  lsSet(k, v) { try { localStorage.setItem(Component.K + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+
+  constructor(props) {
+    super(props);
+    const T = Component.T, crews = {}, att = {}, attAt = {}, actAt = {}, forms = {}, photos = {}, tabs = {}, showErr = {}, attErr = {}, newMember = {}, draftAt = {};
+    const md = this.stamp(), today = this.dayKey();
+    const R = this.lsGet('roster') || {}, D = this.lsGet('day.' + today) || {};
+    this.arch = this.lsGet('archive') || {};
+    const meta = this.lsGet('meta'); if (!meta) this.lsSet('meta', { firstDay: today });
+    const demoDay = !meta || meta.firstDay === today, last = demoDay ? null : this.lastDay(today);
+    const has = (o, id) => !!o && Object.prototype.hasOwnProperty.call(o, id);
+    T.forEach(t => {
+      crews[t.id] = has(R.crews, t.id) ? R.crews[t.id] : [{ name: t.leadman, role: 'Leadman' }].concat(t.crew.map(([name, role]) => ({ name, role })));
+      const a = {};
+      crews[t.id].forEach(m => { const r = demoDay ? t.absent[m.name] : null; a[m.name] = { present: !r, reason: r || null }; });
+      if (has(D.att, t.id)) Object.keys(D.att[t.id]).forEach(n => { if (a[n]) a[n] = D.att[t.id][n]; });
+      att[t.id] = a;
+      const lf = last && last.forms && last.forms[t.id];
+      const blank = { from: (lf && lf.from) || t.form.from, to: (lf && lf.to) || t.form.to, location: '', details: '', status: 'ONGOING', targetLoc: '', actualLoc: '', plate: (lf && lf.plate) || t.form.plate, targetMH: (lf && lf.targetMH) || t.form.targetMH, actualMH: '', remarks: '' };
+      attAt[t.id] = has(D.attAt, t.id) ? D.attAt[t.id] : (demoDay ? t.seed.att : null);
+      actAt[t.id] = has(D.actAt, t.id) ? D.actAt[t.id] : (demoDay ? t.seed.act : null);
+      forms[t.id] = { ...(demoDay ? t.form : blank), ...(has(D.forms, t.id) ? D.forms[t.id] : {}) };
+      photos[t.id] = has(D.photos, t.id) ? D.photos[t.id] : !demoDay ? { before: null, after: null } : {
+        before: t.seed.before ? { name: `BEFORE_${md}_0712.jpg`, url: null, time: '7:12 AM' } : null,
+        after: t.seed.after ? { name: `AFTER_${md}_1538.jpg`, url: null, time: '3:38 PM' } : null,
+      };
+      draftAt[t.id] = has(D.draftAt, t.id) ? D.draftAt[t.id] : null;
+      tabs[t.id] = 'activity'; showErr[t.id] = false; attErr[t.id] = false; newMember[t.id] = '';
+    });
+    const saved = JSON.parse(JSON.stringify(forms));
+    this.state = { screen: props.startScreen || 'login', pin: '', pinError: false, user: null, adminTab: 'all', tabs, crews, removed: R.removed || [], att, attAt, actAt, forms, saved, photos, draftAt, showErr, attErr, newMember, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0 };
+  }
+  componentDidMount() {
+    this._flush = () => this.flushDrafts();
+    this._vis = () => { if (document.visibilityState === 'hidden') this.flushDrafts(); };
+    window.addEventListener('pagehide', this._flush); window.addEventListener('beforeunload', this._flush); document.addEventListener('visibilitychange', this._vis);
+    this.setState({ storagePct: this.storagePct() });
+  }
+  componentWillUnmount() {
+    clearTimeout(this._t); clearTimeout(this._cr); Object.values(this._as || {}).forEach(clearTimeout);
+    window.removeEventListener('pagehide', this._flush); window.removeEventListener('beforeunload', this._flush); document.removeEventListener('visibilitychange', this._vis);
+    this.flushDrafts();
+  }
+  flushDrafts() {
+    const s = this.state; if (!s) return;
+    const dirty = Component.T.filter(t => !s.actAt[t.id] && JSON.stringify(s.forms[t.id]) !== JSON.stringify(s.saved[t.id]));
+    if (!dirty.length) return;
+    const saved = { ...s.saved }, draftAt = { ...s.draftAt }, at = this.now();
+    dirty.forEach(t => { saved[t.id] = { ...s.forms[t.id] }; draftAt[t.id] = at; });
+    this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: saved, photos: s.photos, draftAt });
+  }
+  scheduleAutosave(id) { this._as = this._as || {}; clearTimeout(this._as[id]); this._as[id] = setTimeout(() => this.saveDraft(id, true), 1200); }
+  storagePct() { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf(Component.K) === 0) n += k.length + (localStorage.getItem(k) || '').length; } } catch (e) {} return Math.min(100, Math.round(n / 5000000 * 100)); }
+  lastDay(today) {
+    const p = Component.K + 'day.'; let best = null;
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf(p) === 0) { const d = k.slice(p.length); if (d < today && (!best || d > best)) best = d; } } } catch (e) {}
+    return best ? this.lsGet('day.' + best) : null;
+  }
+  persist() {
+    const s = this.state;
+    const ok = this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: s.saved, photos: s.photos, draftAt: s.draftAt }) && this.lsSet('roster', { crews: s.crews, removed: s.removed });
+    if (!ok) this.toast('Phone storage full — last change NOT saved', 'err');
+    const pct = this.storagePct(); if (pct !== s.storagePct) this.setState({ storagePct: pct });
+    return ok;
+  }
+  upP(key, id, fn, msg, kind) { this.setState(s => ({ [key]: { ...s[key], [id]: fn(s[key][id]) } }), () => { if (this.persist() && msg) this.toast(msg, kind); }); }
+  photoCount(id, s) { return (s.photos[id].before ? 1 : 0) + (s.photos[id].after ? 1 : 0); }
+  scrollToId(elId) { const el = document.getElementById(elId); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 120, behavior: 'smooth' }); }
+  fmtDate(iso, wd) { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', wd ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' }); }
+  historyFor(t, s) {
+    const map = {};
+    t.history.forEach(h => { map[h.date] = { ...h }; });
+    Object.values(this.arch || {}).forEach(a => { if (a.teamId === t.id && a.date !== s.today) map[a.date] = { date: a.date, location: a.location, details: a.details, status: a.status, att: a.att, photos: a.photos, submittedAt: a.submittedAt }; });
+    return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  stamp() { const d = new Date(); return String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); }
+  now() { return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); }
+  toast(msg, kind = 'ok') { clearTimeout(this._t); this.setState({ toast: { msg, kind } }); this._t = setTimeout(() => this.setState({ toast: null }), 2800); }
+  up(key, id, fn) { this.setState(s => ({ [key]: { ...s[key], [id]: fn(s[key][id]) } })); }
+
+  lookup(pin) {
+    if (pin === '0000') return { name: 'Operations Admin', initials: 'OA', role: 'Admin', team: 'All teams · NLEX', screen: 'admin', cta: 'Open command center' };
+    const t = Component.T.find(x => x.pin === pin);
+    return t ? { name: t.leadman, initials: this.initials(t.leadman), role: 'Leadman', team: t.name, screen: t.id, cta: "Start today's report" } : null;
+  }
+  initials(n) { return n.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
+  press(k) {
+    if (this.state.user) return;
+    if (this.state.pinError && this.state.pin.length === 4) return;
+    if (k === 'del') return this.setState(s => ({ pin: s.pin.slice(0, -1), pinError: false }));
+    const pin = (this.state.pin + k).slice(0, 4);
+    if (pin.length < 4) return this.setState({ pin, pinError: false });
+    const user = this.lookup(pin);
+    if (user) this.setState({ pin, user, pinError: false });
+    else { this.setState({ pin, pinError: true }); setTimeout(() => this.setState({ pin: '', pinError: false }), 900); }
+  }
+  logout = () => this.setState({ screen: 'login', user: null, pin: '', pinError: false });
+
+  photosOk(id, s) {
+    const p = s.photos[id]; const needAfter = this.props.afterPhotoAlwaysRequired || s.forms[id].status === 'COMPLETE';
+    return !!p.before && (!needAfter || !!p.after);
+  }
+  teamStatus(id, s) {
+    if (s.attAt[id] && s.actAt[id]) return 'submitted';
+    if (!s.attAt[id]) return 'missing';
+    if (!this.photosOk(id, s)) return 'photos';
+    return 'draft';
+  }
+  chip(kind) { const c = Component.CHIP[kind]; return `display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap;background:${c[1]};color:${c[2]};`; }
+  statusChip(st) { return st === 'COMPLETE' ? 'display:inline-flex;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:#DDF2E6;color:#17693F;' : 'display:inline-flex;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:#FDEBD3;color:#8A4B00;'; }
+  roleTag(role) {
+    const c = role === 'Leadman' ? 'background:#0F2540;color:#FFFFFF;' : role === 'Skilled' ? 'background:#E8760F;color:#FFFFFF;' : 'background:#E3E7EC;color:#0F2540;';
+    return `align-self:flex-start;flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;letter-spacing:0.3px;${c}`;
+  }
+  counts(id, s) { const list = s.crews[id]; const p = list.filter(m => (s.att[id][m.name] || {}).present).length; return { present: p, total: list.length }; }
+  validate(id, s) {
+    const f = s.forms[id], p = s.photos[id], needAfter = this.props.afterPhotoAlwaysRequired || f.status === 'COMPLETE';
+    const flags = { location: !f.location.trim(), details: !f.details.trim(), plate: !f.plate.trim(), actualMH: !(Number(f.actualMH) > 0), before: !p.before, after: needAfter && !p.after, att: !s.attAt[id] };
+    const labels = { att: 'Submit attendance first (Attendance tab)', location: 'Enter the location', details: 'Describe the work done', actualMH: 'Enter actual manpower', plate: 'Enter equipment / plate number', before: 'Add a Before Work photo', after: 'Add an After Work photo (required when Complete)' };
+    return { flags, list: Object.keys(labels).filter(k => flags[k]).map(k => ({ label: labels[k] })) };
+  }
+
+  submitAct(id) {
+    const v = this.validate(id, this.state);
+    if (v.list.length) { this.up('showErr', id, () => true); this.toast(v.list.length > 1 ? `${v.list.length} items need attention` : '1 item needs attention', 'err'); setTimeout(() => this.scrollToId('act-errors'), 60); return; }
+    const at = this.now();
+    this.setState(s => ({ actAt: { ...s.actAt, [id]: at }, showErr: { ...s.showErr, [id]: false }, saved: { ...s.saved, [id]: { ...s.forms[id] } }, draftAt: { ...s.draftAt, [id]: at } }), () => {
+      const s = this.state, c = this.counts(id, s);
+      this.arch = { ...this.arch, [s.today + '|' + id]: { date: s.today, teamId: id, ...s.forms[id], submittedAt: at, att: `${c.present}/${c.total}`, photos: this.photoCount(id, s) } };
+      if (this.persist() && this.lsSet('archive', this.arch)) this.toast('Report submitted and saved');
+    });
+  }
+  saveDraft(id, silent) {
+    if (this.state.actAt[id]) return;
+    if (this._as) clearTimeout(this._as[id]);
+    const at = this.now();
+    this.setState(s => ({ saved: { ...s.saved, [id]: { ...s.forms[id] } }, draftAt: { ...s.draftAt, [id]: at } }), () => { if (this.persist() && !silent) this.toast(`Draft saved on this phone · ${at}`, 'info'); });
+  }
+  copyCsv() {
+    const le = this.state.lastExport; if (!le) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(le.csv.replace(/^\ufeff/, '')).then(() => this.toast('CSV copied — paste into Excel'), () => this.toast('Copy blocked by this browser', 'err'));
+    else this.toast('Copy not supported on this browser', 'err');
+  }
+  editAct(id) {
+    this.setState(s => ({ actAt: { ...s.actAt, [id]: null } }), () => {
+      const a = { ...this.arch }; delete a[this.state.today + '|' + id]; this.arch = a; this.lsSet('archive', a);
+      if (this.persist()) this.toast('Report unlocked — submit again when done', 'info');
+    });
+  }
+  submitAtt(id) {
+    const s = this.state; const missing = s.crews[id].some(m => { const a = s.att[id][m.name]; return a && !a.present && !a.reason; });
+    if (missing) { this.up('attErr', id, () => true); this.toast('Add a reason for absent crew', 'err'); setTimeout(() => this.scrollToId('att-errors'), 60); return; }
+    this.up('attErr', id, () => false); this.upP('attAt', id, () => this.now(), 'Attendance submitted and saved');
+  }
+  thumb(file) {
+    return new Promise((resolve, reject) => {
+      const src = URL.createObjectURL(file), img = new Image();
+      img.onload = () => {
+        try { const sc = Math.min(1, 560 / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); resolve(c.toDataURL('image/jpeg', 0.7)); }
+        catch (e) { reject(e); } finally { URL.revokeObjectURL(src); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('bad image')); };
+      img.src = src;
+    });
+  }
+  async onFile(id, key, e) {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (!/^image\//.test(f.type)) return this.toast('That file is not a photo', 'err');
+    let url; try { url = await this.thumb(f); } catch (err) { return this.toast('Could not read that photo — try again', 'err'); }
+    const old = this.state.photos[id][key]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url);
+    this.setState(s => ({ photos: { ...s.photos, [id]: { ...s.photos[id], [key]: { name: f.name, url, time: this.now() } } } }), () => {
+      if (!this.persist()) return;
+      const pct = this.storagePct(), label = key === 'before' ? 'Before photo saved' : 'After photo saved';
+      if (pct >= 70) this.toast(`${label} · phone storage ${pct}% full — ask admin to export & reset soon`, 'err'); else this.toast(label);
+    });
+  }
+  addMember(id) {
+    const name = (this.state.newMember[id] || '').trim();
+    if (!name) return this.toast('Type a name first', 'err');
+    if (this.state.crews[id].some(m => m.name.toLowerCase() === name.toLowerCase())) return this.toast('Already on this crew', 'err');
+    this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name, role: 'Crew' }) }, att: { ...s.att, [id]: { ...s.att[id], [name]: { present: true, reason: null } } }, newMember: { ...s.newMember, [id]: '' } }),
+      () => { if (this.persist()) this.toast(`${name} added`); });
+  }
+  removeMember(id, m) {
+    const key = id + '|' + m.name;
+    if (this.state.confirmRemove !== key) { clearTimeout(this._cr); this.setState({ confirmRemove: key }); this._cr = setTimeout(() => this.setState({ confirmRemove: null }), 4000); return; }
+    clearTimeout(this._cr);
+    this.setState(s => {
+      const a = { ...s.att[id] }, last = a[m.name] || null; delete a[m.name];
+      return { confirmRemove: null, crews: { ...s.crews, [id]: s.crews[id].filter(x => x.name !== m.name) }, att: { ...s.att, [id]: a },
+        removed: s.removed.concat({ teamId: id, name: m.name, role: m.role, removedOn: s.today, removedAt: this.now(), lastAttendance: last }) };
+    }, () => { if (this.persist()) this.toast(`${m.name} removed · archived`, 'info'); });
+  }
+  restoreMember(id, r) {
+    if (this.state.crews[id].some(m => m.name === r.name)) return this.toast('Already on this crew', 'err');
+    this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name: r.name, role: r.role }) },
+      att: { ...s.att, [id]: { ...s.att[id], [r.name]: r.lastAttendance || { present: true, reason: null } } },
+      removed: s.removed.filter(x => !(x.teamId === id && x.name === r.name)) }), () => { if (this.persist()) this.toast(`${r.name} restored`); });
+  }
+  exportCsv() {
+    const s = this.state, T = Component.T, rows = [];
+    const head = ['Date', 'Team', 'Leadman', 'Location', 'Activity Details', 'Status', 'From', 'To', 'Target (KM/Loc)', 'Actual (KM/Loc)', 'Target Manpower', 'Actual Manpower', 'Crew Present', 'Absent (reason)', 'Equipment / Plate', 'Photos', 'Remarks', 'Report State', 'Submitted At'];
+    T.forEach(t => {
+      const id = t.id, f = s.actAt[id] ? s.forms[id] : s.saved[id], c = this.counts(id, s), st = this.teamStatus(id, s);
+      const abs = s.crews[id].filter(m => s.att[id][m.name] && !s.att[id][m.name].present).map(m => `${m.name} (${s.att[id][m.name].reason || 'no reason'})`).join('; ');
+      rows.push([s.today, t.name, t.leadman, f.location, f.details, f.status, f.from, f.to, f.targetLoc, f.actualLoc, f.targetMH, f.actualMH, s.attAt[id] ? `${c.present}/${c.total}` : 'Not submitted', abs, f.plate, this.photoCount(id, s), f.remarks, Component.CHIP[st][0], s.actAt[id] || '']);
+    });
+    T.forEach(t => this.historyFor(t, s).forEach(h => rows.push([h.date, t.name, t.leadman, h.location, h.details, h.status, '', '', '', '', '', '', h.att, '', '', h.photos, '', 'Submitted', h.submittedAt || ''])));
+    const esc = v => { const x = v == null ? '' : String(v); return /[",\r\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+    const csv = '\ufeff' + [head].concat(rows).map(r => r.map(esc).join(',')).join('\r\n');
+    const name = `NLEX_Daily_Report_${s.today}.csv`;
+    if (head.length !== 19 || rows.some(r => r.length !== head.length)) return this.toast('Export stopped: column count mismatch', 'err');
+    const le = { name, rows: rows.length, at: this.now(), csv, ok: false };
+    try {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      if (!blob.size) throw new Error('empty');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name;
+      if (!('download' in a)) throw new Error('no download support');
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      le.ok = true;
+      this.setState({ lastExport: le });
+      this.toast(`Download requested: ${name} (${rows.length} rows). No file? Use Copy CSV.`, 'info');
+    } catch (e) { this.setState({ lastExport: le }); this.toast('Download failed on this device — use Copy CSV', 'err'); }
+  }
+  resetDemo() {
+    if (!window.confirm('Reset all demo data on this device? Drafts, submissions, photos and roster changes will be cleared.')) return;
+    try { Object.keys(localStorage).filter(k => k.indexOf(Component.K) === 0).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+    window.location.reload();
+  }
+
+  renderVals() {
+    const s = this.state, T = Component.T, CH = Component.CHIP;
+    const d0 = new Date();
+    const todayLong = d0.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const short = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const todayShort = short(d0);
+    const photoCount = id => this.photoCount(id, s);
+
+    const pill = on => `min-height:36px;border:none;border-radius:999px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:Archivo,sans-serif;${on ? 'background:#E8760F;color:#FFFFFF;' : 'background:#1B3A63;color:#D5DEEA;'}`;
+    const navItems = [['login', 'Login'], ['admin', 'Admin']].concat(T.map(t => [t.id, t.short])).map(([id, label]) => ({ label, style: pill(s.screen === id), go: () => this.setState({ screen: id, ...(id === 'login' ? { user: null, pin: '', pinError: false } : {}) }) }));
+
+    const keys = ['1','2','3','4','5','6','7','8','9','','0','del'].map(k => ({
+      label: k === 'del' ? '⌫ Delete' : k,
+      aria: k === 'del' ? 'Delete last digit' : k ? 'Digit ' + k : 'blank',
+      press: () => k && this.press(k),
+      style: k === '' ? 'visibility:hidden;' : `min-height:60px;background:#F2F4F7;border:1px solid #DDE2E8;border-radius:12px;font-family:Archivo,sans-serif;font-weight:700;color:#0F2540;cursor:pointer;font-size:${k === 'del' ? '14px' : '24px'};`,
+    }));
+    const dots = [0, 1, 2, 3].map(i => ({ style: `width:18px;height:18px;border-radius:50%;border:2.5px solid ${s.pinError ? '#C62828' : '#0F2540'};background:${s.pin.length > i ? (s.pinError ? '#C62828' : '#0F2540') : 'transparent'};` }));
+    const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && this.setState({ screen: s.user.screen }), reset: () => this.setState({ user: null, pin: '' }) };
+
+    const statuses = {}; T.forEach(t => { statuses[t.id] = this.teamStatus(t.id, s); });
+    const submittedN = T.filter(t => statuses[t.id] === 'submitted').length;
+    const manpower = T.reduce((a, t) => a + (s.attAt[t.id] ? this.counts(t.id, s).present : 0), 0);
+    const planned = T.reduce((a, t) => a + (Number(s.forms[t.id].targetMH) || 0), 0);
+    const completed = T.filter(t => s.actAt[t.id] && s.forms[t.id].status === 'COMPLETE').length;
+    const ongoing = T.filter(t => s.actAt[t.id] && s.forms[t.id].status !== 'COMPLETE').length;
+    const pendingN = 4 - submittedN;
+    const kpi = {
+      manpower, planned, completed, ongoingLabel: `${ongoing} ongoing reported`, active: T.filter(t => s.attAt[t.id]).length, pending: pendingN,
+      manBar: `height:100%;background:#E8760F;width:${planned ? Math.min(100, Math.round(manpower / planned * 100)) : 0}%;`,
+      pendingCard: `border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:8px;${pendingN ? 'background:#FFF3E3;border:1px solid #F3C98F;' : 'background:#FFFFFF;border:1px solid #DDE2E8;'}`,
+    };
+
+    const notes = { missing: 'Attendance not submitted', photos: 'Photos missing on draft', draft: 'Activity report not sent' };
+    const pending = T.filter(t => statuses[t.id] !== 'submitted').map(t => ({ team: t.name, leadman: t.leadman, note: notes[statuses[t.id]], chip: CH[statuses[t.id]][0], chipStyle: this.chip(statuses[t.id]), open: () => this.setState({ adminTab: t.id }) }));
+    const tabBase = on => `display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:190px;min-height:84px;padding:12px 14px;border-radius:12px;cursor:pointer;text-align:left;flex:none;${on ? 'background:#0F2540;color:#FFFFFF;border:1.5px solid #0F2540;' : 'background:#FFFFFF;color:#0F2540;border:1.5px solid #DDE2E8;'}`;
+    const subSt = on => `font-size:13px;${on ? 'color:#C5D2E2;' : 'color:#5B6472;'}`;
+    const adminTabs = [{ id: 'all', label: 'All Teams', sub: `${submittedN} of 4 submitted`, hasChip: false }]
+      .concat(T.map(t => ({ id: t.id, label: t.name, sub: t.leadman, hasChip: true, chip: CH[statuses[t.id]][0], chipAria: 'Status: ' + CH[statuses[t.id]][0], chipStyle: this.chip(statuses[t.id]) })))
+      .map(a => ({ ...a, style: tabBase(s.adminTab === a.id), subStyle: subSt(s.adminTab === a.id), select: () => this.setState({ adminTab: a.id }) }));
+
+    const cols = 'display:grid;grid-template-columns:200px 90px 210px minmax(280px,1fr) 110px 110px 120px 80px 160px;border-top:1px solid #E7EAEF;';
+    const todayRow = t => {
+      const id = t.id, f = s.forms[id], done = !!s.actAt[id], st = statuses[id], c = this.counts(id, s);
+      return { team: t.name, leadman: t.leadman, date: todayShort, location: done ? f.location : '—',
+        details: done ? f.details : (st === 'missing' ? 'Waiting for attendance and activity report' : 'Activity report not submitted yet'),
+        detailsStyle: `padding:12px 14px;font-size:14px;line-height:1.4;${done ? 'color:#33404F;' : 'color:#8A4B00;font-style:italic;'}`,
+        hasStatus: done, statusLabel: f.status === 'COMPLETE' ? 'Complete' : 'Ongoing', statusStyle: this.statusChip(f.status),
+        targetActual: done ? `${f.targetLoc} / ${f.actualLoc}` : '—', manpower: s.attAt[id] ? `${c.present} / ${f.targetMH}` : 'No attendance',
+        photos: `${photoCount(id)} / 2`, reportLabel: CH[st][0], reportStyle: this.chip(st) };
+    };
+    let rows;
+    if (s.adminTab === 'all') rows = T.map(todayRow);
+    else {
+      const t = T.find(x => x.id === s.adminTab);
+      rows = [todayRow(t)].concat(this.historyFor(t, s).map(h => ({ team: t.name, leadman: t.leadman, date: this.fmtDate(h.date), location: h.location, details: h.details, detailsStyle: 'padding:12px 14px;font-size:14px;line-height:1.4;color:#33404F;', hasStatus: true, statusLabel: h.status === 'COMPLETE' ? 'Complete' : 'Ongoing', statusStyle: this.statusChip(h.status), targetActual: '—', manpower: h.att, photos: `${h.photos} / 2`, reportLabel: 'Submitted', reportStyle: this.chip('submitted') })));
+    }
+    rows = rows.map((r, i) => ({ ...r, rowStyle: cols + `background:${i % 2 ? '#F9FAFB' : '#FFFFFF'};` }));
+
+    let roster = null;
+    if (s.adminTab !== 'all') {
+      const id = s.adminTab, t = T.find(x => x.id === id);
+      roster = { name: t.name, count: s.crews[id].length, newVal: s.newMember[id],
+        onNew: e => { const v = e.target.value; this.up('newMember', id, () => v); },
+        onKey: e => { if (e.key === 'Enter') this.addMember(id); },
+        add: () => this.addMember(id),
+        members: s.crews[id].map(m => { const conf = s.confirmRemove === id + '|' + m.name; return { ...m, roleTagStyle: this.roleTag(m.role), removable: m.role !== 'Leadman',
+          removeLabel: conf ? 'Tap to confirm' : 'Remove', removeAria: conf ? `Confirm removing ${m.name}` : `Remove ${m.name} from crew`,
+          removeStyle: `min-height:44px;border-radius:8px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;${conf ? 'background:#A8261B;color:#FFFFFF;border:1px solid #A8261B;' : 'background:#FFFFFF;color:#A8261B;border:1px solid #E0B4AF;'}`,
+          remove: () => this.removeMember(id, m) }; }),
+        archived: s.removed.filter(r => r.teamId === id).map(r => ({ name: r.name, meta: `${r.role} · removed ${this.fmtDate(r.removedOn)}, ${r.removedAt}`, aria: `Restore ${r.name} to crew`, restore: () => this.restoreMember(id, r) })),
+        hasArchived: s.removed.some(r => r.teamId === id) };
+    }
+    const admin = {
+      hasPending: pending.length > 0, allDone: pending.length === 0, pending, tabs: adminTabs, rows, hasRoster: !!roster, roster: roster || {},
+      tableTitle: s.adminTab === 'all' ? `Today's reports · ${todayShort}` : `${T.find(x => x.id === s.adminTab).name} · today + recent`,
+      onExport: () => this.exportCsv(), resetDemo: () => this.resetDemo(), copyCsv: () => this.copyCsv(),
+      hasExport: !!s.lastExport,
+      exportLine: s.lastExport ? `${s.lastExport.ok ? 'Download requested' : 'Download failed'} · ${s.lastExport.name} · ${s.lastExport.rows} rows · ${s.lastExport.at}` : '',
+      storageLine: `Report storage on this device: ${s.storagePct || 0}% of ~5 MB`,
+      storageStyle: `font-size:13px;font-weight:700;${(s.storagePct || 0) >= 70 ? 'color:#A8261B;' : 'color:#33404F;'}`,
+    };
+
+    let cur = {};
+    const t = T.find(x => x.id === s.screen);
+    if (t) {
+      const id = t.id, f = s.forms[id], st = statuses[id], c = this.counts(id, s), v = this.validate(id, s);
+      const err = s.showErr[id] ? v.flags : {};
+      const locked = !!s.actAt[id], dirty = JSON.stringify(f) !== JSON.stringify(s.saved[id]);
+      const lockBtn = (danger, lk) => `min-height:44px;display:flex;align-items:center;justify-content:center;padding:0 12px;background:${lk ? '#EEF1F4' : '#FFFFFF'};border:1.5px solid ${lk ? '#DDE2E8' : danger ? '#E0B4AF' : '#0F2540'};color:${lk ? '#5B6472' : danger ? '#A8261B' : '#0F2540'};border-radius:8px;font-weight:700;font-size:14px;cursor:${lk ? 'not-allowed' : 'pointer'};`;
+      const set = {}; ['from','to','location','details','targetLoc','actualLoc','plate','targetMH','actualMH','remarks'].forEach(k => { set[k] = e => { const val = e.target.value; this.up('forms', id, o => ({ ...o, [k]: val })); this.scheduleAutosave(id); }; });
+      const INP = 'width:100%;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;';
+      const bad = b => b ? 'border-color:#C62828;background:#FFF6F5;' : '';
+      const fs = {
+        location: INP + 'font-weight:700;' + bad(err.location),
+        details: 'width:100%;min-height:96px;padding:12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;resize:vertical;line-height:1.4;' + bad(err.details),
+        plate: INP + 'font-weight:700;text-transform:uppercase;' + bad(err.plate),
+        actualMH: INP + 'font-size:18px;font-weight:700;' + bad(err.actualMH),
+      };
+      const seg = (on, color) => `min-height:52px;border-radius:10px;font-family:Archivo,sans-serif;font-weight:800;font-size:16px;cursor:pointer;${on ? `background:${color};color:#FFFFFF;border:2px solid ${color};` : 'background:#FFFFFF;color:#33404F;border:2px solid #C9D1DB;'}`;
+      const needAfter = this.props.afterPhotoAlwaysRequired || f.status === 'COMPLETE';
+      const photoList = ['before', 'after'].map(k => {
+        const p = s.photos[id][k], req = k === 'before' || needAfter, b = err[k], lbl = k === 'before' ? 'Before Work' : 'After Work';
+        return { label: k === 'before' ? 'Before Work' : 'After Work', hint: k === 'before' ? 'Take before the crew starts' : 'Take when work is finished',
+          empty: !p, filled: !!p, hasUrl: !!(p && p.url), noUrl: !!(p && !p.url), previewStyle: p && p.url ? `position:absolute;inset:0;background:url("${p.url}") center/cover no-repeat;` : '', name: p ? p.name : '', time: p ? p.time : '',
+          reqLabel: p ? 'Uploaded' : (req ? 'Required' : 'Optional'),
+          reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
+          dropStyle: `height:196px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:10px;${locked ? 'cursor:not-allowed;opacity:0.55;' : 'cursor:pointer;'}${b ? 'border:2px dashed #C62828;background:#FFF6F5;' : 'border:2px dashed #8795A8;background:#F7F8FA;'}`,
+          onFile: e => this.onFile(id, k, e),
+          takeAria: locked ? `${lbl} photo, locked` : `Upload ${lbl} photo`, replaceAria: locked ? `Replace ${lbl} photo, locked` : `Replace ${lbl} photo`, removeAria: locked ? `Remove ${lbl} photo, locked` : `Remove ${lbl} photo`,
+          replaceStyle: lockBtn(false, locked), removeStyle: lockBtn(true, locked),
+          remove: () => { if (locked) return; const old = s.photos[id][k]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url); this.upP('photos', id, o => ({ ...o, [k]: null }), 'Photo removed', 'info'); } };
+      });
+      const people = s.crews[id].map(m => {
+        const a = s.att[id][m.name] || { present: true, reason: null }, absent = !a.present, needR = absent && !a.reason && s.attErr[id];
+        const half = on => `min-height:44px;min-width:78px;border:none;font-weight:700;font-size:14px;cursor:pointer;`;
+        return { name: m.name, role: m.role, roleTagStyle: this.roleTag(m.role), absent, present: !absent,
+          pAria: `Mark ${m.name} present`, aAria: `Mark ${m.name} absent`, groupAria: `Attendance for ${m.name}`,
+          rowStyle: `display:flex;flex-direction:column;gap:10px;border-radius:12px;padding:12px;${absent ? 'background:#FFF6F5;border:1.5px solid #EDB3AC;' : 'background:#FFFFFF;border:1.5px solid #DDE2E8;'}`,
+          pStyle: half() + (a.present ? 'background:#17693F;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
+          aStyle: half() + (absent ? 'background:#A8261B;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
+          setPresent: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: true, reason: null } })),
+          setAbsent: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: false, reason: (o[m.name] || {}).reason || null } })),
+          reasonLabelStyle: `font-size:13px;font-weight:700;${needR ? 'color:#A8261B;' : 'color:#33404F;'}`,
+          reasons: Component.REASONS.map(r => ({ label: r, on: a.reason === r, pick: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: false, reason: r } })),
+            style: `min-height:44px;padding:0 16px;border-radius:999px;font-size:14px;font-weight:700;cursor:pointer;${a.reason === r ? 'background:#0F2540;color:#FFFFFF;border:1.5px solid #0F2540;' : 'background:#FFFFFF;color:#0F2540;border:1.5px solid #C9D1DB;'}` })) };
+      });
+      const photosOk = this.photosOk(id, s);
+      const stepsDef = [['Attendance', !!s.attAt[id]], ['Activity', !!(f.location.trim() && f.details.trim())], ['Photos', photosOk], ['Submitted', !!s.actAt[id]]];
+      const steps = stepsDef.map(([label, done]) => ({ label: (done ? '✓ ' : '') + label, aria: `${label}: ${done ? 'done' : 'not done'}`, bar: `height:5px;border-radius:3px;background:${done ? '#F2A65A' : '#2E4B72'};`, labelStyle: `font-size:12px;font-weight:700;${done ? 'color:#FFFFFF;' : 'color:#9FB2CA;'}` }));
+      const tabSt = on => `flex:1;min-height:52px;border:none;background:none;display:flex;align-items:center;justify-content:center;gap:6px;font-family:Archivo,sans-serif;font-size:15px;font-weight:700;cursor:pointer;${on ? 'color:#0F2540;box-shadow:inset 0 -3px 0 #E8760F;' : 'color:#5B6472;'}`;
+      const tab = s.tabs[id];
+      const tabs = [['activity', 'Activity', !s.actAt[id]], ['attendance', 'Attendance', !s.attAt[id]], ['history', 'History', false]].map(([k, label, dot]) => ({ label, dot, selected: tab === k, aria: label + (dot ? ', not submitted' : ''), style: tabSt(tab === k), go: () => this.up('tabs', id, () => k) }));
+      const hist = [];
+      if (s.actAt[id]) hist.push({ date: `Today · ${todayShort}`, location: f.location, details: f.details, statusLabel: f.status === 'COMPLETE' ? 'Complete' : 'Ongoing', statusStyle: this.statusChip(f.status), leadman: t.leadman, att: `${c.present}/${c.total}`, photos: `${photoCount(id)} photos` });
+      this.historyFor(t, s).forEach(h => hist.push({ date: this.fmtDate(h.date, true), location: h.location, details: h.details, statusLabel: h.status === 'COMPLETE' ? 'Complete' : 'Ongoing', statusStyle: this.statusChip(h.status), leadman: t.leadman, att: h.att, photos: `${h.photos} photo${h.photos === 1 ? '' : 's'}` }));
+
+      cur = { ...t, initials: this.initials(t.leadman), chip: CH[st][0], chipStyle: this.chip(st), steps, tabs,
+        onActivity: tab === 'activity', onAttendance: tab === 'attendance', onHistory: tab === 'history',
+        form: f, set, fs, photoList,
+        ongoingStyle: seg(f.status === 'ONGOING', '#B35F00') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''), completeStyle: seg(f.status === 'COMPLETE', '#17693F') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''),
+        isOngoing: f.status === 'ONGOING', isComplete: f.status === 'COMPLETE', chipAria: 'Report status: ' + CH[st][0],
+        useBtnStyle: lockBtn(false, locked) + 'font-size:13px;',
+        saveLine: dirty ? '● Unsaved — autosaving…' : s.draftAt[id] ? `✓ Saved on this phone · ${s.draftAt[id]}` : 'Not saved yet',
+        saveLineStyle: `font-size:13px;font-weight:700;${dirty ? 'color:#8A4B00;' : 'color:#17693F;'}`,
+        setOngoing: () => { this.up('forms', id, o => ({ ...o, status: 'ONGOING' })); this.scheduleAutosave(id); }, setComplete: () => { this.up('forms', id, o => ({ ...o, status: 'COMPLETE' })); this.scheduleAutosave(id); },
+        storageWarn: (s.storagePct || 0) >= 60, storageHint: `Phone storage ${s.storagePct || 0}% full. Ask admin to export & reset soon.`,
+        presentCount: c.present, absentCount: c.total - c.present,
+        useAttendance: () => { this.up('forms', id, o => ({ ...o, actualMH: String(c.present) })); this.scheduleAutosave(id); },
+        locked: !!s.actAt[id], actDone: !!s.actAt[id], actOpen: !s.actAt[id], actAt: s.actAt[id],
+        showActErr: s.showErr[id] && v.list.length > 0, missing: v.list,
+        submittedLabel: '✓ Submitted ' + (s.actAt[id] || ''), reportSubmittedLabel: '✓ Report submitted at ' + (s.actAt[id] || ''), attSubmittedLabel: '✓ Attendance submitted at ' + (s.attAt[id] || ''),
+        saveDraft: () => this.saveDraft(id),
+        submitAct: () => this.submitAct(id), editAct: () => this.editAct(id),
+        attDone: !!s.attAt[id], attOpen: !s.attAt[id], attAt: s.attAt[id], showAttErr: s.attErr[id],
+        attBtn: s.attAt[id] ? 'Update attendance' : `Submit attendance (${c.present}/${c.total})`,
+        markAll: () => { this.upP('att', id, o => { const n = {}; Object.keys(o).forEach(k => { n[k] = { present: true, reason: null }; }); return n; }); this.toast('Everyone marked present', 'info'); },
+        submitAtt: () => this.submitAtt(id), people, history: hist, noToday: !s.actAt[id] };
+    }
+
+    const tc = { ok: '#17693F', err: '#A8261B', info: '#0F2540' };
+    return {
+      navItems, todayLong, todayShort, login, kpi, admin, cur, logout: this.logout,
+      showNav: this.props.prototypeNav !== false,
+      tabsBarStyle: `position:sticky;top:${this.props.prototypeNav !== false ? 52 : 0}px;z-index:40;display:flex;background:#FFFFFF;border-bottom:1px solid #DDE2E8;`,
+      isLogin: s.screen === 'login', isAdmin: s.screen === 'admin', isTeam: !!t,
+      hasToast: !!s.toast, toastMsg: s.toast ? s.toast.msg : '',
+      toastStyle: `background:${s.toast ? tc[s.toast.kind] : '#0F2540'};color:#FFFFFF;font-weight:700;font-size:15px;padding:12px 18px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.25);text-align:center;overflow-wrap:anywhere;word-break:break-word;width:max-content;max-width:100%;`,
+    };
+  }
+}
+</script>
+</body>
+</html>

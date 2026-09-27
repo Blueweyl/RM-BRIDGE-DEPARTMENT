@@ -31,6 +31,10 @@ function makeBackend(opts = {}) {
     getMaxRows() { return this.maxRows; } insertRowsAfter(a, n) { this.maxRows += n; }
     setFrozenRows() {} setColumnWidth() {} setRowHeight() {}
     deleteRow(r) { this.data.splice(r - 1, 1); }
+    getLastColumn() { return Math.max(0, ...this.data.slice(0, this.getLastRow()).map(r => { let n = r.length; while (n > 0 && cellStr(r[n - 1]) === '') n--; return n; })); }
+    clearContents() { this.data = []; return this; }
+    setName(n) { delete sheets[this.name]; this.name = n; sheets[n] = this; return this; }
+    protect() { return { setDescription() { return this; }, setWarningOnly() { return this; } }; }
   }
   const ss = { getName: () => 'NLEX Daily Report DB', getId: () => 'SHEETID', getUrl: () => 'https://docs.google.com/spreadsheets/d/SHEETID/edit',
     getSheetByName: n => sheets[n] || null, insertSheet: n => (sheets[n] = new Sheet(n)), getSheets: () => Object.values(sheets), deleteSheet: s => { delete sheets[s.name]; } };
@@ -42,9 +46,9 @@ function makeBackend(opts = {}) {
   const roots = {};
   const env = {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
-    CacheService: { getScriptCache: () => ({ get: k => (cache[k] && cache[k].exp > Date.now() ? cache[k].v : null), put: (k, v, s) => { cache[k] = { v, exp: Date.now() + s * 1000 }; } }) },
+    CacheService: { getScriptCache: () => ({ get: k => (cache[k] && cache[k].exp > Date.now() ? cache[k].v : null), put: (k, v, s) => { cache[k] = { v, exp: Date.now() + s * 1000 }; }, remove: k => { delete cache[k]; } }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     Utilities: {
       getUuid: () => crypto.randomUUID(),
@@ -62,7 +66,11 @@ function makeBackend(opts = {}) {
   };
   vm.createContext(env);
   vm.runInContext(fs.readFileSync(codePath, 'utf8'), env);
-  const call = body => JSON.parse(env.doPost({ postData: { contents: JSON.stringify(body.action === 'login' && body.setupKey === undefined ? { ...body, setupKey: props.SETUP_KEY } : body) } }).s);
-  return { env, sheets, files, props, cache, clock, call, roots };
+  const raw = body => JSON.parse(env.doPost({ postData: { contents: JSON.stringify(body) } }).s);
+  // Test helper: a login without a deviceKey enrols `body.device` once with the real setup key.
+  const devices = {};
+  const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: props.SETUP_KEY, deviceLabel: name }).deviceKey);
+  const call = body => raw(body.action === 'login' && body.deviceKey === undefined ? { ...body, deviceKey: deviceKey(body.device || 'test') } : body);
+  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots };
 }
 module.exports = { makeBackend };

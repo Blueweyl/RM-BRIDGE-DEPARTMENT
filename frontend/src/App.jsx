@@ -7,6 +7,19 @@ import View from './View.jsx';
 import * as api from './api.js';
 import { liveMethods } from './live.js';
 
+// Attendance is { status, note } per person; no entry means "not verified yet".
+const OLD_REASON = { 'No show': 'Absent', Sick: 'Sick', Leave: 'Leave', Other: 'Other' };
+function normAtt(a) {
+  if (!a) return null;
+  if (a.status) return { status: a.status, note: a.note || '' };
+  if (a.present === true) return { status: 'Present', note: '' };
+  if (a.present === false && a.reason) return { status: OLD_REASON[a.reason] || 'Other', note: '' };
+  return null;
+}
+const isNum = v => /^\d+(\.\d{1,3})?$/.test(String(v == null ? '' : v).trim());
+const isInt = v => /^\d+$/.test(String(v == null ? '' : v).trim());
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export default class Component extends React.Component {
   static defaultProps = { startScreen: 'login', afterPhotoAlwaysRequired: false, prototypeNav: true };
 
@@ -48,7 +61,7 @@ export default class Component extends React.Component {
         { date: '2026-09-25', location: 'CANDABA VIADUCT North bound', details: 'Erect scaffolding pier 110-111', status: 'COMPLETE', att: '8/8', photos: 2 },
         { date: '2026-09-23', location: 'CANDABA VIADUCT South bound', details: 'Dismantle remaining scaffolding pier 105-106', status: 'COMPLETE', att: '6/8', photos: 2 } ] },
   ];
-  static REASONS = ['Sick', 'Leave', 'No show', 'Other'];
+  static NOT_PRESENT = [['Absent', 'No show'], ['Leave', 'Leave'], ['Rest Day', 'Rest Day'], ['Sick', 'Sick'], ['Other', 'Other']];
   static CHIP = {
     submitted: ['Submitted', '#DDF2E6', '#17693F'],
     draft: ['Draft', '#E3E9F2', '#2B4A73'],
@@ -63,7 +76,7 @@ export default class Component extends React.Component {
 
   constructor(props) {
     super(props);
-    const T = Component.T, crews = {}, att = {}, attAt = {}, actAt = {}, forms = {}, photos = {}, tabs = {}, showErr = {}, attErr = {}, newMember = {}, draftAt = {};
+    const T = Component.T, crews = {}, att = {}, attAt = {}, actAt = {}, forms = {}, photos = {}, tabs = {}, showErr = {}, attErr = {}, newMember = {}, draftAt = {}, attDirty = {};
     const md = this.stamp(), today = this.dayKey();
     this.live = api.isLive();                                   // live
     const sess = this.live ? api.session() : null;              // live
@@ -75,8 +88,10 @@ export default class Component extends React.Component {
     T.forEach(t => {
       crews[t.id] = has(R.crews, t.id) ? R.crews[t.id] : [{ name: t.leadman, role: 'Leadman' }].concat(t.crew.map(([name, role]) => ({ name, role })));
       const a = {};
-      crews[t.id].forEach(m => { const r = demoDay ? t.absent[m.name] : null; a[m.name] = { present: !r, reason: r || null }; });
-      if (has(D.att, t.id)) Object.keys(D.att[t.id]).forEach(n => { if (a[n]) a[n] = D.att[t.id][n]; });
+      // A new day starts with everyone NOT verified; the leadman marks each person explicitly.
+      crews[t.id].forEach(m => { const r = demoDay ? t.absent[m.name] : null; a[m.name] = demoDay ? { status: r ? (OLD_REASON[r] || r) : 'Present', note: '' } : null; });
+      if (has(D.att, t.id)) Object.keys(D.att[t.id]).forEach(n => { if (n in a) a[n] = normAtt(D.att[t.id][n]); });
+      attDirty[t.id] = !!(D.attDirty && D.attDirty[t.id]);
       att[t.id] = a;
       const lf = last && last.forms && last.forms[t.id];
       const blank = { from: (lf && lf.from) || t.form.from, to: (lf && lf.to) || t.form.to, location: '', details: '', status: 'ONGOING', targetLoc: '', actualLoc: '', plate: (lf && lf.plate) || t.form.plate, targetMH: (lf && lf.targetMH) || t.form.targetMH, actualMH: '', remarks: '' };
@@ -92,13 +107,15 @@ export default class Component extends React.Component {
     });
     const saved = JSON.parse(JSON.stringify(forms));
     this.state = { screen: this.live ? (sess ? this.liveUser(sess.user).screen : 'login') : (props.startScreen || 'login'), pin: '', pinError: false, user: sess ? this.liveUser(sess.user) : null,
-      online: api.online(), busy: null, loading: false, loginMsg: null, lastLoad: null, loadErr: null, sheetUrl: '', adminTab: 'all', tabs, crews, removed: R.removed || [], att, attAt, actAt, forms, saved, photos, draftAt, showErr, attErr, newMember, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0 };
+      online: api.online(), busy: null, loading: false, loginMsg: null, lastLoad: null, loadErr: null, sheetUrl: '', adminTab: 'all', tabs, crews, removed: R.removed || [], att, attAt, actAt, forms, saved, photos, draftAt, showErr, attErr, newMember, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0,
+      attDirty, rev: {}, adminRange: { from: this.shift(today, -30), to: today }, adminView: null, adminData: {} };
   }
   componentDidMount() {
     this._flush = () => this.flushDrafts();
     this._vis = () => { if (document.visibilityState === 'hidden') this.flushDrafts(); };
     window.addEventListener('pagehide', this._flush); window.addEventListener('beforeunload', this._flush); document.addEventListener('visibilitychange', this._vis);
     this.setState({ storagePct: this.storagePct() });
+    this.checkQuota();
     if (this.live) this.liveMount();
   }
   componentWillUnmount() {
@@ -113,8 +130,24 @@ export default class Component extends React.Component {
     if (!dirty.length) return;
     const saved = { ...s.saved }, draftAt = { ...s.draftAt }, at = this.now();
     dirty.forEach(t => { saved[t.id] = { ...s.forms[t.id] }; draftAt[t.id] = at; });
-    this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: saved, photos: s.photos, draftAt });
+    this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: saved, photos: this.photosForStore(s.photos), draftAt, attDirty: s.attDirty });
   }
+  /** Live mode keeps photo pixels in IndexedDB; localStorage only gets the small metadata. */
+  photosForStore(photos) {
+    if (!this.live) return photos;
+    const o = {};
+    Object.keys(photos).forEach(id => { o[id] = {}; ['before', 'after'].forEach(k => { const p = photos[id][k]; o[id][k] = p && p.url && p.url.indexOf('data:') === 0 ? { ...p, url: null } : p; }); });
+    return o;
+  }
+  /** Whole-phone storage (IndexedDB + localStorage) as a percentage of what the browser allows. */
+  async checkQuota() {
+    try {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+      const e = await navigator.storage.estimate();
+      if (e.quota) { const pct = Math.round(e.usage / e.quota * 100); if (pct > (this.state.storagePct || 0)) this.setState({ storagePct: pct }); }
+    } catch (e) {}
+  }
+  shift(iso, days) { const [y, m, d] = iso.split('-').map(Number); const x = new Date(Date.UTC(y, m - 1, d + days)); return x.toISOString().slice(0, 10); }
   scheduleAutosave(id) { this._as = this._as || {}; clearTimeout(this._as[id]); this._as[id] = setTimeout(() => this.saveDraft(id, true), 1200); }
   storagePct() { let n = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf(Component.K) === 0) n += k.length + (localStorage.getItem(k) || '').length; } } catch (e) {} return Math.min(100, Math.round(n / 5000000 * 100)); }
   lastDay(today) {
@@ -124,8 +157,8 @@ export default class Component extends React.Component {
   }
   persist() {
     const s = this.state;
-    const ok = this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: s.saved, photos: s.photos, draftAt: s.draftAt }) && this.lsSet('roster', { crews: s.crews, removed: s.removed });
-    if (!ok) this.toast('Phone storage full — last change NOT saved', 'err');
+    const ok = this.lsSet('day.' + s.today, { att: s.att, attAt: s.attAt, actAt: s.actAt, forms: s.saved, photos: this.photosForStore(s.photos), draftAt: s.draftAt, attDirty: s.attDirty }) && this.lsSet('roster', { crews: s.crews, removed: s.removed });
+    if (!ok) this.toast('Phone storage full — last change NOT saved on this phone. Free up space.', 'err');
     const pct = this.storagePct(); if (pct !== s.storagePct) this.setState({ storagePct: pct });
     return ok;
   }
@@ -180,11 +213,26 @@ export default class Component extends React.Component {
     const c = role === 'Leadman' ? 'background:#0F2540;color:#FFFFFF;' : role === 'Skilled' ? 'background:#E8760F;color:#FFFFFF;' : 'background:#E3E7EC;color:#0F2540;';
     return `align-self:flex-start;flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;letter-spacing:0.3px;${c}`;
   }
-  counts(id, s) { const list = s.crews[id]; const p = list.filter(m => (s.att[id][m.name] || {}).present).length; return { present: p, total: list.length }; }
+  counts(id, s) {
+    const list = s.crews[id], a = s.att[id] || {};
+    let present = 0, verified = 0;
+    list.forEach(m => { const x = a[m.name]; if (x && x.status) { verified++; if (x.status === 'Present') present++; } });
+    return { present, total: list.length, verified, unverified: list.length - verified };
+  }
+  /** Same rules the server enforces (google-apps-script/Code.gs validateReport_), shown before sending. */
   validate(id, s) {
-    const f = s.forms[id], p = s.photos[id], needAfter = this.props.afterPhotoAlwaysRequired || f.status === 'COMPLETE';
-    const flags = { location: !f.location.trim(), details: !f.details.trim(), plate: !f.plate.trim(), actualMH: !(Number(f.actualMH) > 0), before: !p.before, after: needAfter && !p.after, att: !s.attAt[id] };
-    const labels = { att: 'Submit attendance first (Attendance tab)', location: 'Enter the location', details: 'Describe the work done', actualMH: 'Enter actual manpower', plate: 'Enter equipment / plate number', before: 'Add a Before Work photo', after: 'Add an After Work photo (required when Complete)' };
+    const f = s.forms[id], p = s.photos[id], needAfter = this.props.afterPhotoAlwaysRequired || f.status === 'COMPLETE', c = this.counts(id, s);
+    const qtyOk = v => isNum(v) && Number(v) <= 100 && (f.unit !== 'Locations' || isInt(v));
+    const manOk = v => isInt(v) && Number(v) >= 1 && Number(v) <= 60;
+    const why = f.status !== 'COMPLETE' || (qtyOk(f.targetLoc) && qtyOk(f.actualLoc) && Number(f.actualLoc) < Number(f.targetLoc)) || (manOk(f.actualMH) && !!s.attAt[id] && Number(f.actualMH) > c.present);
+    const flags = { att: !s.attAt[id], times: !(HHMM.test(f.from || '') && HHMM.test(f.to || '') && f.from < f.to), location: !f.location.trim(), details: !f.details.trim(),
+      target: !qtyOk(f.targetLoc), actual: !qtyOk(f.actualLoc), targetMH: !manOk(f.targetMH), actualMH: !manOk(f.actualMH), plate: !f.plate.trim(),
+      remarks: why && !f.remarks.trim(), before: !p.before, after: needAfter && !p.after };
+    const unitWord = f.unit === 'Locations' ? 'a whole number of locations' : 'a number of KM';
+    const labels = { att: 'Submit attendance first (Attendance tab)', times: 'Enter valid times — "From" must be before "To"', location: 'Enter the location', details: 'Describe the work done',
+      target: `Enter the target (${unitWord}, max 100)`, actual: `Enter the actual (${unitWord}, max 100)`, targetMH: 'Enter target manpower (1–60)', actualMH: 'Enter actual manpower (1–60)',
+      plate: 'Enter equipment / plate number', remarks: 'Add remarks: explain why the work is Ongoing, below target, or manpower is above attendance',
+      before: 'Add a Before Work photo', after: 'Add an After Work photo (required when Complete)' };
     return { flags, list: Object.keys(labels).filter(k => flags[k]).map(k => ({ label: labels[k] })) };
   }
 
@@ -218,16 +266,28 @@ export default class Component extends React.Component {
     });
   }
   submitAtt(id) {
-    const s = this.state; const missing = s.crews[id].some(m => { const a = s.att[id][m.name]; return a && !a.present && !a.reason; });
-    if (missing) { this.up('attErr', id, () => true); this.toast('Add a reason for absent crew', 'err'); setTimeout(() => this.scrollToId('att-errors'), 60); return; }
+    const s = this.state, c = this.counts(id, s);
+    const needNote = s.crews[id].some(m => { const a = s.att[id][m.name]; return a && a.status === 'Other' && !(a.note || '').trim(); });
+    if (c.unverified || needNote) { this.up('attErr', id, () => true); this.toast(c.unverified ? `${c.unverified} crew not marked yet` : 'Write a note for "Other"', 'err'); setTimeout(() => this.scrollToId('att-errors'), 60); return; }
     if (this.live) { this.up('attErr', id, () => false); return this.state.busy ? null : this.liveSubmitAtt(id); }   // live
     this.up('attErr', id, () => false); this.upP('attAt', id, () => this.now(), 'Attendance submitted and saved');
   }
-  thumb(file, max = 560, quality = 0.7) {
+  /** Resized JPEG as a data URL. `mark` (lines of text) stamps an evidence band on the bottom of the photo. */
+  thumb(file, max = 560, quality = 0.7, mark) {
     return new Promise((resolve, reject) => {
       const src = URL.createObjectURL(file), img = new Image();
       img.onload = () => {
-        try { const sc = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); resolve(c.toDataURL('image/jpeg', quality)); }
+        try {
+          const sc = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+          const g = c.getContext('2d'); g.drawImage(img, 0, 0, c.width, c.height);
+          if (mark && mark.length) {
+            const fs = Math.max(11, Math.round(c.width / 42)), lh = Math.round(fs * 1.35), h = lh * mark.length + fs;
+            g.fillStyle = 'rgba(15,37,64,0.78)'; g.fillRect(0, c.height - h, c.width, h);
+            g.fillStyle = '#FFFFFF'; g.font = `700 ${fs}px sans-serif`; g.textBaseline = 'top';
+            mark.forEach((line, i) => g.fillText(String(line).slice(0, 90), Math.round(fs * 0.6), c.height - h + Math.round(fs / 2) + i * lh, c.width - fs));
+          }
+          resolve(c.toDataURL('image/jpeg', quality));
+        }
         catch (e) { reject(e); } finally { URL.revokeObjectURL(src); }
       };
       img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('bad image')); };
@@ -251,7 +311,7 @@ export default class Component extends React.Component {
     if (!name) return this.toast('Type a name first', 'err');
     if (this.state.crews[id].some(m => m.name.toLowerCase() === name.toLowerCase())) return this.toast('Already on this crew', 'err');
     if (this.live) return this.liveRoster('addMember', { teamId: id, name }, `${name} added`).then(ok => ok && this.up('newMember', id, () => ''));   // live
-    this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name, role: 'Crew' }) }, att: { ...s.att, [id]: { ...s.att[id], [name]: { present: true, reason: null } } }, newMember: { ...s.newMember, [id]: '' } }),
+    this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name, role: 'Crew' }) }, att: { ...s.att, [id]: { ...s.att[id], [name]: null } }, newMember: { ...s.newMember, [id]: '' } }),
       () => { if (this.persist()) this.toast(`${name} added`); });
   }
   removeMember(id, m) {
@@ -269,7 +329,7 @@ export default class Component extends React.Component {
     if (this.live) return this.liveRoster('restoreMember', { personId: r.id }, `${r.name} restored`);   // live
     if (this.state.crews[id].some(m => m.name === r.name)) return this.toast('Already on this crew', 'err');
     this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name: r.name, role: r.role }) },
-      att: { ...s.att, [id]: { ...s.att[id], [r.name]: r.lastAttendance || { present: true, reason: null } } },
+      att: { ...s.att, [id]: { ...s.att[id], [r.name]: normAtt(r.lastAttendance) } },
       removed: s.removed.filter(x => !(x.teamId === id && x.name === r.name)) }), () => { if (this.persist()) this.toast(`${r.name} restored`); });
   }
   exportCsv() {
@@ -278,11 +338,11 @@ export default class Component extends React.Component {
     const head = ['Date', 'Team', 'Leadman', 'Location', 'Activity Details', 'Status', 'From', 'To', 'Target (KM/Loc)', 'Actual (KM/Loc)', 'Target Manpower', 'Actual Manpower', 'Crew Present', 'Absent (reason)', 'Equipment / Plate', 'Photos', 'Remarks', 'Report State', 'Submitted At'];
     T.forEach(t => {
       const id = t.id, f = s.actAt[id] ? s.forms[id] : s.saved[id], c = this.counts(id, s), st = this.teamStatus(id, s);
-      const abs = s.crews[id].filter(m => s.att[id][m.name] && !s.att[id][m.name].present).map(m => `${m.name} (${s.att[id][m.name].reason || 'no reason'})`).join('; ');
+      const abs = s.crews[id].filter(m => !s.att[id][m.name] || s.att[id][m.name].status !== 'Present').map(m => { const x = s.att[id][m.name]; return `${m.name} (${x ? (x.status === 'Absent' ? 'No show' : x.status) + (x.note ? ': ' + x.note : '') : 'not verified'})`; }).join('; ');
       rows.push([s.today, t.name, t.leadman, f.location, f.details, f.status, f.from, f.to, f.targetLoc, f.actualLoc, f.targetMH, f.actualMH, s.attAt[id] ? `${c.present}/${c.total}` : 'Not submitted', abs, f.plate, this.photoCount(id, s), f.remarks, Component.CHIP[st][0], s.actAt[id] || '']);
     });
     T.forEach(t => this.historyFor(t, s).forEach(h => rows.push([h.date, t.name, t.leadman, h.location, h.details, h.status, '', '', '', '', '', '', h.att, '', '', h.photos, '', 'Submitted', h.submittedAt || ''])));
-    const esc = v => { const x = v == null ? '' : String(v); return /[",\r\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+    const esc = v => { let x = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(x)) x = "'" + x; return /[",\r\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
     const csv = '\ufeff' + [head].concat(rows).map(r => r.map(esc).join(',')).join('\r\n');
     const name = `NLEX_Daily_Report_${s.today}.csv`;
     if (head.length !== 19 || rows.some(r => r.length !== head.length)) return this.toast('Export stopped: column count mismatch', 'err');
@@ -304,6 +364,39 @@ export default class Component extends React.Component {
     if (!window.confirm('Reset all demo data on this device? Drafts, submissions, photos and roster changes will be cleared.')) return;
     try { Object.keys(localStorage).filter(k => k.indexOf(Component.K) === 0).forEach(k => localStorage.removeItem(k)); } catch (e) {}
     window.location.reload();
+  }
+
+  /** Admin (live): date range, export, report overview with missing/late flags, revision history, audit log. */
+  adminTools(s) {
+    const d = s.adminData || {}, rg = s.adminRange;
+    const setRange = k => e => { const v = e.target.value; this.setState(st => ({ adminRange: { ...st.adminRange, [k]: v } })); };
+    const chip = (bg, fg) => `display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap;background:${bg};color:${fg};`;
+    const stateChip = { Submitted: chip('#DDF2E6', '#17693F'), Draft: chip('#E3E9F2', '#2B4A73'), Missing: chip('#FBE0DD', '#A8261B') };
+    const rep = d.reports, rev = d.revisions, aud = d.audit;
+    const reportRows = rep && s.adminView === 'reports' ? rep.rows.filter(r => s.adminTab === 'all' || r.teamId === s.adminTab).map(r => ({
+      key: r.teamId + r.reportDate, date: this.fmtDate(r.reportDate, true), team: r.team, leadman: r.leadman, state: r.state, stateStyle: stateChip[r.state],
+      late: r.late, lateLabel: r.state === 'Submitted' ? 'Late' : 'Overdue', lateStyle: chip('#FDEBD3', '#8A4B00'),
+      attendance: r.attendanceRows ? `${r.attendanceRows}/${r.rosterSize} marked · ${r.crewPresent || '—'} present` : 'No attendance',
+      attOk: r.attendanceRows >= r.rosterSize && r.rosterSize > 0,
+      photos: `${r.photos}/${r.photosNeeded}`, photosOk: r.photos >= r.photosNeeded,
+      version: r.version !== '0' ? 'v' + r.version : '—', location: r.location || '—',
+      hasHistory: !!r.reportId, historyLabel: `History (${r.revisions})`, history: () => this.liveRevisions(r.reportId), reportId: r.reportId })) : [];
+    const kindLabel = { submitted: 'Submitted', reopened: 'Reopened', 'attendance before update': 'Attendance changed' };
+    const revisions = rev && rev.revisions ? rev.revisions.map(v => ({ key: v.revisionId, title: `${kindLabel[v.kind] || v.kind} · v${v.version} · rev ${v.rev}`, meta: `${v.at} · ${v.by}`, reason: v.reason,
+      summary: [v.snapshot.status, v.snapshot.location, v.snapshot.crewPresent && 'crew ' + v.snapshot.crewPresent, v.snapshot.actualManpower && 'manpower ' + v.snapshot.actualManpower].filter(Boolean).join(' · ') })) : [];
+    const auditRows = aud && s.adminView === 'audit' ? aud.rows.map(a => ({ key: a.auditId, at: a.at, who: `${a.user}${a.role ? ' (' + a.role + ')' : ''}`, team: a.teamId || '—', action: a.action,
+      denied: /^DENIED/.test(a.action), detail: [a.reason, a.before && 'before: ' + a.before, a.after && 'after: ' + a.after].filter(Boolean).join(' · ').slice(0, 400), entity: a.entityId })) : [];
+    const missingN = rep ? rep.rows.filter(r => r.state !== 'Submitted' && r.overdue).length : 0, lateN = rep ? rep.rows.filter(r => r.state === 'Submitted' && r.late).length : 0;
+    return {
+      from: rg.from, to: rg.to, onFrom: setRange('from'), onTo: setRange('to'), max: s.today,
+      showReports: () => this.liveAdminReports(), showAudit: () => this.liveAuditLog(), close: () => this.setState({ adminView: null }),
+      reportsLabel: s.busy === 'reports' ? 'Loading…' : 'Show reports', auditLabel: s.busy === 'audit' ? 'Loading…' : 'Audit log',
+      onReports: s.adminView === 'reports' && !!rep, onAudit: s.adminView === 'audit' && !!aud,
+      reportRows, reportsSummary: rep ? `${rep.from} to ${rep.to} · ${missingN} missing/overdue · ${lateN} submitted late` : '',
+      hasRevisions: !!(rev && rev.reportId), revisionsTitle: rev ? `Revision history · ${rev.reportId}` : '', revisions, noRevisions: !!(rev && rev.revisions && !rev.revisions.length),
+      closeRevisions: () => this.setState(st => ({ adminData: { ...st.adminData, revisions: null } })),
+      auditRows, auditSummary: aud ? `${aud.from} to ${aud.to}${s.adminTab !== 'all' ? ' · ' + s.adminTab : ''} · showing ${aud.rows.length} of ${aud.total}` : '',
+    };
   }
 
   renderVals() {
@@ -391,51 +484,76 @@ export default class Component extends React.Component {
       xlsxUrl: s.lastExport && s.lastExport.xlsxUrl, hasXlsx: !!(s.lastExport && s.lastExport.xlsxUrl),
       exportLabel: s.busy === 'export' ? 'Exporting…' : 'Export CSV (Excel)',
       storageStyle: `font-size:13px;font-weight:700;${(s.storagePct || 0) >= 70 ? 'color:#A8261B;' : 'color:#33404F;'}`,
+      tools: this.live ? this.adminTools(s) : null, hasTools: this.live,
     };
 
     let cur = {};
     const t = T.find(x => x.id === s.screen);
     if (t) {
       const id = t.id, f = s.forms[id], st = statuses[id], c = this.counts(id, s), v = this.validate(id, s);
+      const pendingN = ['before', 'after'].filter(k => s.photos[id][k] && s.photos[id][k].pending).length;
       const err = s.showErr[id] ? v.flags : {};
       const locked = !!s.actAt[id], dirty = JSON.stringify(f) !== JSON.stringify(s.saved[id]);
       const lockBtn = (danger, lk) => `min-height:44px;display:flex;align-items:center;justify-content:center;padding:0 12px;background:${lk ? '#EEF1F4' : '#FFFFFF'};border:1.5px solid ${lk ? '#DDE2E8' : danger ? '#E0B4AF' : '#0F2540'};color:${lk ? '#5B6472' : danger ? '#A8261B' : '#0F2540'};border-radius:8px;font-weight:700;font-size:14px;cursor:${lk ? 'not-allowed' : 'pointer'};`;
       const set = {}; ['from','to','location','details','targetLoc','actualLoc','plate','targetMH','actualMH','remarks'].forEach(k => { set[k] = e => { const val = e.target.value; this.up('forms', id, o => ({ ...o, [k]: val })); this.scheduleAutosave(id); }; });
       const INP = 'width:100%;min-height:48px;padding:0 12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;';
       const bad = b => b ? 'border-color:#C62828;background:#FFF6F5;' : '';
+      const TIME = 'width:100%;min-height:48px;padding:0 8px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;';
+      const NUM = INP + 'font-size:18px;font-weight:700;';
+      const AREA = 'width:100%;padding:12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;resize:vertical;line-height:1.4;';
       const fs = {
+        from: TIME + bad(err.times), to: TIME + bad(err.times),
         location: INP + 'font-weight:700;' + bad(err.location),
-        details: 'width:100%;min-height:96px;padding:12px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;resize:vertical;line-height:1.4;' + bad(err.details),
+        details: AREA + 'min-height:96px;' + bad(err.details),
+        targetLoc: NUM + bad(err.target), actualLoc: NUM + bad(err.actual), targetMH: NUM + bad(err.targetMH),
         plate: INP + 'font-weight:700;text-transform:uppercase;' + bad(err.plate),
-        actualMH: INP + 'font-size:18px;font-weight:700;' + bad(err.actualMH),
+        actualMH: NUM + bad(err.actualMH),
+        remarks: AREA + 'min-height:72px;' + bad(err.remarks),
       };
+      const remarksNeeded = f.status !== 'COMPLETE' || (isNum(f.targetLoc) && isNum(f.actualLoc) && Number(f.actualLoc) < Number(f.targetLoc)) || (!!s.attAt[id] && isInt(f.actualMH) && Number(f.actualMH) > c.present);
       const seg = (on, color) => `min-height:52px;border-radius:10px;font-family:Archivo,sans-serif;font-weight:800;font-size:16px;cursor:pointer;${on ? `background:${color};color:#FFFFFF;border:2px solid ${color};` : 'background:#FFFFFF;color:#33404F;border:2px solid #C9D1DB;'}`;
       const needAfter = this.props.afterPhotoAlwaysRequired || f.status === 'COMPLETE';
       const photoList = ['before', 'after'].map(k => {
         const p = s.photos[id][k], req = k === 'before' || needAfter, b = err[k], lbl = k === 'before' ? 'Before Work' : 'After Work';
+        const warn = p && (p.lost || (p.pending && p.error));
         return { label: k === 'before' ? 'Before Work' : 'After Work', hint: k === 'before' ? 'Take before the crew starts' : 'Take when work is finished',
           empty: !p, filled: !!p, hasUrl: !!(p && p.url), noUrl: !!(p && !p.url), previewStyle: p && p.url ? `position:absolute;inset:0;background:url("${p.url}") center/cover no-repeat;` : '', name: p ? p.name : '', time: p ? p.time : '',
-          reqLabel: p ? (p.pending ? 'Not uploaded yet' : 'Uploaded') : (req ? 'Required' : 'Optional'),
-          reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${p && p.pending ? 'background:#FDEBD3;color:#8A4B00;' : p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
+          reqLabel: p ? (p.lost ? 'Missing — retake' : p.pending ? (p.error ? 'Upload failed · retrying' : 'Not uploaded yet') : 'Uploaded') : (req ? 'Required' : 'Optional'),
+          reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${warn ? 'background:#FBE0DD;color:#A8261B;' : p && p.pending ? 'background:#FDEBD3;color:#8A4B00;' : p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
+          errorText: p && p.pending && p.error ? p.error : '', hasError: !!(p && p.pending && p.error),
           dropStyle: `height:196px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:10px;${locked ? 'cursor:not-allowed;opacity:0.55;' : 'cursor:pointer;'}${b ? 'border:2px dashed #C62828;background:#FFF6F5;' : 'border:2px dashed #8795A8;background:#F7F8FA;'}`,
           onFile: e => this.onFile(id, k, e),
-          takeAria: locked ? `${lbl} photo, locked` : `Upload ${lbl} photo`, replaceAria: locked ? `Replace ${lbl} photo, locked` : `Replace ${lbl} photo`, removeAria: locked ? `Remove ${lbl} photo, locked` : `Remove ${lbl} photo`,
+          takeAria: locked ? `${lbl} photo, locked` : `Take ${lbl} photo with camera`, galleryAria: locked ? `${lbl} photo from gallery, locked` : `Upload ${lbl} photo`,
+          replaceAria: locked ? `Replace ${lbl} photo, locked` : `Replace ${lbl} photo`, removeAria: locked ? `Remove ${lbl} photo, locked` : `Remove ${lbl} photo`,
           replaceStyle: lockBtn(false, locked), removeStyle: lockBtn(true, locked),
-          remove: () => { if (locked) return; if (this.live) return this.liveRemovePhoto(id, k); const old = s.photos[id][k]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url); this.upP('photos', id, o => ({ ...o, [k]: null }), 'Photo removed', 'info'); } };
+          remove: () => {
+            if (locked) return;
+            if (!window.confirm(`Remove the ${lbl} photo?` + (p && p.pending ? ' It has not been uploaded, so it will be deleted from this phone.' : ''))) return;
+            if (this.live) return this.liveRemovePhoto(id, k);
+            const old = s.photos[id][k]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url); this.upP('photos', id, o => ({ ...o, [k]: null }), 'Photo removed', 'info');
+          } };
       });
+      const attLocked = this.live && !!s.actAt[id];
+      const setAtt = (name, val) => {
+        if (attLocked) return this.toast('Report already submitted — tap Edit report first to change attendance', 'err');
+        this.setState(st => ({ att: { ...st.att, [id]: { ...st.att[id], [name]: val } }, attDirty: { ...st.attDirty, [id]: true } }), () => this.persist());
+      };
       const people = s.crews[id].map(m => {
-        const a = s.att[id][m.name] || { present: true, reason: null }, absent = !a.present, needR = absent && !a.reason && s.attErr[id];
-        const half = on => `min-height:44px;min-width:78px;border:none;font-weight:700;font-size:14px;cursor:pointer;`;
-        return { name: m.name, role: m.role, roleTagStyle: this.roleTag(m.role), absent, present: !absent,
-          pAria: `Mark ${m.name} present`, aAria: `Mark ${m.name} absent`, groupAria: `Attendance for ${m.name}`,
-          rowStyle: `display:flex;flex-direction:column;gap:10px;border-radius:12px;padding:12px;${absent ? 'background:#FFF6F5;border:1.5px solid #EDB3AC;' : 'background:#FFFFFF;border:1.5px solid #DDE2E8;'}`,
-          pStyle: half() + (a.present ? 'background:#17693F;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
-          aStyle: half() + (absent ? 'background:#A8261B;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
-          setPresent: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: true, reason: null } })),
-          setAbsent: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: false, reason: (o[m.name] || {}).reason || null } })),
+        const a = s.att[id][m.name], st = a && a.status, present = st === 'Present', absent = !!st && !present, unverified = !st;
+        const needR = st === 'Other' && !(a.note || '').trim() && s.attErr[id];
+        const half = `min-height:44px;min-width:78px;border:none;font-weight:700;font-size:14px;cursor:pointer;`;
+        return { name: m.name, role: m.role, roleTagStyle: this.roleTag(m.role), absent, present, unverified,
+          pAria: `Mark ${m.name} present`, aAria: `Mark ${m.name} not present`, groupAria: `Attendance for ${m.name}`,
+          rowStyle: `display:flex;flex-direction:column;gap:10px;border-radius:12px;padding:12px;${unverified ? (s.attErr[id] ? 'background:#FFF6F5;border:2px dashed #C62828;' : 'background:#FFFBF2;border:1.5px dashed #D9A55B;') : absent ? 'background:#FFF6F5;border:1.5px solid #EDB3AC;' : 'background:#FFFFFF;border:1.5px solid #DDE2E8;'}`,
+          pStyle: half + (present ? 'background:#17693F;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
+          aStyle: half + (absent ? 'background:#A8261B;color:#FFFFFF;' : 'background:#FFFFFF;color:#5B6472;'),
+          setPresent: () => setAtt(m.name, { status: 'Present', note: '' }),
+          setAbsent: () => setAtt(m.name, absent ? a : { status: 'Absent', note: '' }),
           reasonLabelStyle: `font-size:13px;font-weight:700;${needR ? 'color:#A8261B;' : 'color:#33404F;'}`,
-          reasons: Component.REASONS.map(r => ({ label: r, on: a.reason === r, pick: () => this.upP('att', id, o => ({ ...o, [m.name]: { present: false, reason: r } })),
-            style: `min-height:44px;padding:0 16px;border-radius:999px;font-size:14px;font-weight:700;cursor:pointer;${a.reason === r ? 'background:#0F2540;color:#FFFFFF;border:1.5px solid #0F2540;' : 'background:#FFFFFF;color:#0F2540;border:1.5px solid #C9D1DB;'}` })) };
+          reasons: Component.NOT_PRESENT.map(([val, label]) => ({ label, on: st === val, pick: () => setAtt(m.name, { status: val, note: val === 'Other' ? (a && a.note) || '' : '' }),
+            style: `min-height:44px;padding:0 16px;border-radius:999px;font-size:14px;font-weight:700;cursor:pointer;${st === val ? 'background:#0F2540;color:#FFFFFF;border:1.5px solid #0F2540;' : 'background:#FFFFFF;color:#0F2540;border:1.5px solid #C9D1DB;'}` })),
+          isOther: st === 'Other', note: (a && a.note) || '', onNote: e => setAtt(m.name, { status: 'Other', note: e.target.value.slice(0, 200) }),
+          noteStyle: 'width:100%;min-height:44px;padding:0 12px;border:1.5px solid ' + (needR ? '#C62828' : '#C9D1DB') + ';border-radius:8px;font-size:16px;' };
       });
       const photosOk = this.photosOk(id, s);
       const stepsDef = [['Attendance', !!s.attAt[id]], ['Activity', !!(f.location.trim() && f.details.trim())], ['Photos', photosOk], ['Submitted', !!s.actAt[id]]];
@@ -456,6 +574,8 @@ export default class Component extends React.Component {
         kmStyle: seg(f.unit !== 'Locations', '#0F2540') + 'min-height:44px;font-size:14px;' + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''), locStyle: seg(f.unit === 'Locations', '#0F2540') + 'min-height:44px;font-size:14px;' + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''),
         setKM: () => { this.up('forms', id, o => ({ ...o, unit: 'KM' })); this.scheduleAutosave(id); }, setLoc: () => { this.up('forms', id, o => ({ ...o, unit: 'Locations' })); this.scheduleAutosave(id); },
         submitLabel: s.busy === 'act' ? 'Submitting…' : 'Submit report', editLabel: s.busy === 'edit' ? 'Unlocking…' : 'Edit report',
+        actBusy: s.busy === 'act' || s.busy === 'edit', remarksHint: remarksNeeded ? '(required: Ongoing, below target, or manpower above attendance)' : '(optional)',
+        syncLine: [pendingN ? `${pendingN} photo${pendingN > 1 ? 's' : ''} waiting to upload` : '', this.live && this.unconfirmed('act|' + id + '|' + s.today) && !s.actAt[id] ? 'Last submit was not confirmed — tap Submit report again' : ''].filter(Boolean).join(' · '),
         chipAria: 'Report status: ' + CH[st][0],
         useBtnStyle: lockBtn(false, locked) + 'font-size:13px;',
         saveLine: dirty ? '● Unsaved — autosaving…' : s.draftAt[id] ? `✓ Saved on this phone · ${s.draftAt[id]}` : 'Not saved yet',
@@ -470,8 +590,15 @@ export default class Component extends React.Component {
         saveDraft: () => this.saveDraft(id),
         submitAct: () => this.submitAct(id), editAct: () => this.editAct(id),
         attDone: !!s.attAt[id], attOpen: !s.attAt[id], attAt: s.attAt[id], showAttErr: s.attErr[id],
-        attBtn: s.busy === 'att' ? 'Submitting…' : s.attAt[id] ? 'Update attendance' : `Submit attendance (${c.present}/${c.total})`,
-        markAll: () => { this.upP('att', id, o => { const n = {}; Object.keys(o).forEach(k => { n[k] = { present: true, reason: null }; }); return n; }); this.toast('Everyone marked present', 'info'); },
+        attBtn: s.busy === 'att' ? 'Submitting…' : c.unverified ? `Mark everyone first (${c.unverified} left)` : s.attAt[id] ? 'Update attendance' : `Submit attendance (${c.present}/${c.total})`,
+        attDisabled: !!s.busy || c.unverified > 0 || attLocked, unverifiedCount: c.unverified, hasUnverified: c.unverified > 0, notPresentCount: c.verified - c.present,
+        attLocked, attLockedNote: 'Report is submitted — tap Edit report on the Activity tab to change attendance.',
+        markAll: () => {
+          if (!c.unverified) return;
+          if (!window.confirm(`Mark the ${c.unverified} remaining crew as Present?`)) return;
+          s.crews[id].forEach(m => { if (!(s.att[id][m.name] && s.att[id][m.name].status)) setAtt(m.name, { status: 'Present', note: '' }); });
+          this.toast('Remaining crew marked present', 'info');
+        },
         submitAtt: () => this.submitAtt(id), people, history: hist, noToday: !s.actAt[id] };
     }
 

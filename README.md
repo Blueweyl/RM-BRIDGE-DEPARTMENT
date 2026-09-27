@@ -38,12 +38,12 @@ cd frontend
 npm install
 npm run dev            # local dev server (demo mode)
 npm run build          # production files → frontend/dist/
-npm run test:backend   # 51 backend checks
-npm run test:e2e       # 41 end-to-end checks: leadman phone + admin computer against the real backend code
+npm run test:backend   # 126 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
+npm run test:e2e       # 70 end-to-end checks: leadman phones + admin computer against the real backend code
 ```
 
 - `src/App.jsx`: the design's logic class; lines marked `// live` hand off to `live.js`.
-- `src/live.js`, `src/api.js`: backend calls, sign-in session, offline photo queue.
+- `src/live.js`, `src/api.js`, `src/idb.js`: backend calls, device enrolment + session, idempotent retries, IndexedDB photo queue.
 - `src/View.jsx`: the screens (Login, Admin, Leadman Activity/Attendance/History).
 
 ## Backend (`google-apps-script/`)

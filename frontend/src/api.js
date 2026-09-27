@@ -3,7 +3,8 @@
 // "Live" mode is on when a backend URL is configured, either at build time
 // (VITE_BACKEND_URL in frontend/.env) or once per phone with a setup link:
 //   https://<app address>/?backend=<Apps Script web app URL>&key=<setup key>
-// The setup key (from the backend's showSetupLink()) is never built into the app.
+// The setup key (from the backend's showSetupLink()) is never built into the app. It is
+// exchanged once for a signed per-phone device key and then deleted from the phone.
 // Without a backend URL the app runs as the offline demo (browser storage only).
 
 const P = 'bnlex.live.';
@@ -17,7 +18,7 @@ export function captureSetupLink() {
   try {
     const q = new URLSearchParams(window.location.search);
     const b = q.get('backend'), k = q.get('key');
-    if (b === 'off') { put('url', null); put('session', null); put('key', null); }
+    if (b === 'off') { put('url', null); put('session', null); put('key', null); put('deviceKey', null); }
     else if (b && URL_RE.test(b)) { put('url', b); if (k) put('key', k); }
     else if (k && /^[a-z0-9]{8,64}$/i.test(k)) { put('key', k); }
     else return;
@@ -33,17 +34,31 @@ export function backendUrl() {
 }
 export function isLive() { return !!backendUrl(); }
 
-export function deviceId() {
-  let id = get('device');
-  if (!id) { id = 'device-' + Math.random().toString(36).slice(2, 10); put('device', id); }
-  return id;
+/** Random ID for idempotent requests and photos (retries reuse the same ID). */
+export function uuid() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16); crypto.getRandomValues(b);
+  return [...b].map((x, i) => ([4, 6, 8, 10].includes(i) ? '-' : '') + x.toString(16).padStart(2, '0')).join('');
 }
+
+/** A phone opened with a setup link swaps the setup key for its own device key, then forgets the setup key. */
+export async function enrollIfNeeded() {
+  const k = get('key');
+  if (!k || get('deviceKey') || !isLive()) return;
+  let j;
+  try { j = await call('enroll', { setupKey: k, deviceLabel: (navigator.userAgent || '').slice(0, 60) }); }
+  catch (e) { if (e.notSetUp) put('key', null); throw e; }   // a bad/expired link is not retried on every start
+  put('deviceKey', j.deviceKey);
+  put('key', null);
+}
+export function hasDevice() { return !!(get('deviceKey') || get('key')); }
 
 export function session() {
   const s = get('session');
   return s && s.token && s.expiresAt > Date.now() ? s : null;
 }
 export function clearSession() { put('session', null); }
+export function setSessionUser(user) { const s = session(); if (s) put('session', { ...s, user }); }
 
 export function online() { return typeof navigator === 'undefined' || navigator.onLine !== false; }
 
@@ -51,7 +66,11 @@ export class ApiError extends Error {
   constructor(msg, extra) { super(msg); Object.assign(this, extra || {}); }
 }
 
-/** POST one action. Throws ApiError with .offline, .auth, .wrongPin or .missing set when relevant. */
+/**
+ * POST one action. Throws ApiError with .offline, .auth, .wrongPin, .conflict or .missing set when relevant.
+ * navigator.onLine is only a hint: a phone can report "online" with no route to Google, so every
+ * failure to get a proper JSON answer is treated as "not confirmed" and the caller keeps its data.
+ */
 export async function call(action, data = {}, { timeout = 45000 } = {}) {
   if (!online()) throw new ApiError('No signal. Nothing was sent.', { offline: true });
   const s = session();
@@ -63,22 +82,26 @@ export async function call(action, data = {}, { timeout = 45000 } = {}) {
     res = await fetch(backendUrl(), {
       method: 'POST', redirect: 'follow', signal: ctl.signal,
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ ...data, action, token: s ? s.token : undefined, device: deviceId() }),
+      body: JSON.stringify({ ...data, action, token: s ? s.token : undefined }),
     });
   } catch (e) {
     throw new ApiError(e && e.name === 'AbortError' ? 'Google did not answer in time. Nothing was confirmed — try again.' : 'Cannot reach the server. Check your signal and try again.', { offline: true });
   } finally { clearTimeout(timer); }
   let j;
-  try { j = await res.json(); } catch (e) { throw new ApiError('Unexpected reply from the server (' + res.status + ').'); }
+  try { j = await res.json(); } catch (e) { throw new ApiError('Unexpected reply from the server (' + res.status + '). Nothing was confirmed — try again.', { offline: true }); }
+  if (!j || typeof j !== 'object') throw new ApiError('Unexpected reply from the server. Nothing was confirmed — try again.', { offline: true });
   if (!j.ok) {
     if (j.auth) clearSession();
-    throw new ApiError(j.error || 'Request failed', { auth: !!j.auth, wrongPin: !!j.wrongPin, notSetUp: !!j.notSetUp, missing: j.missing });
+    if (j.notSetUp) put('deviceKey', null);
+    throw new ApiError(j.error || 'Request failed', { auth: !!j.auth, wrongPin: !!j.wrongPin, notSetUp: !!j.notSetUp, missing: j.missing, conflict: !!j.conflict, denied: !!j.denied, retry: !!j.retry });
   }
   return j;
 }
 
 export async function login(pin) {
-  const j = await call('login', { pin, setupKey: get('key') || '' });
+  await enrollIfNeeded();
+  if (!get('deviceKey')) throw new ApiError('This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
+  const j = await call('login', { pin, deviceKey: get('deviceKey') });
   put('session', { token: j.token, user: j.user, expiresAt: j.expiresAt });
   return j.user;
 }
@@ -90,3 +113,16 @@ export function timeOf(stamp) {
   const h = Number(m[1]);
   return (h % 12 || 12) + ':' + m[2] + ' ' + (h < 12 ? 'AM' : 'PM');
 }
+
+/** Sign out here and on the server (best effort: the local session is cleared either way). */
+export async function logout() {
+  const s = session();
+  clearSession();
+  if (s && online()) { try { await fetch(backendUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: s.token }) }); } catch (e) {} }
+}
+
+/** Small JSON values in localStorage (drafts, outbox). Returns false when the phone's storage is full. */
+export function saveLocal(k, v) {
+  try { if (v == null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, JSON.stringify(v)); return true; } catch (e) { return false; }
+}
+export function loadLocal(k) { return get(k); }

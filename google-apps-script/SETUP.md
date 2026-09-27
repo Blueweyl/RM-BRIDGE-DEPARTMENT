@@ -21,14 +21,23 @@ Sheet inside that folder.)
 2. Google asks for permission: **Review permissions** → your account → **Advanced** →
    **Go to … (unsafe)** → **Allow**. ("Unsafe" only means Google has not reviewed a script you wrote yourself.
    It asks for access to this Sheet and your Drive, to save photos.)
-3. The Sheet now has the tabs **Teams, Roster, Attendance, Reports, Photos, Audit**, with the
-   4 teams and 34 crew members. A photo folder is created, or the existing
-   **Bridge NLEX Daily Report Photos** folder is used.
+3. The Sheet now has the tabs **Users, Teams, Roster, Attendance, DailyReports, Photos,
+   Revisions, AuditLog, Sessions**, with the 4 teams and 34 crew members. A photo folder is
+   created, or the existing **Bridge NLEX Daily Report Photos** folder is used.
+
+**Already using an older version?** Paste the new `Code.gs`, run **setup** again, then
+**Deploy → Manage deployments → ✏️ → New version**. Your data is kept: *Reports* becomes
+*DailyReports*, the old *Audit* tab is kept as *Audit (v1)*, and the PINs move from *Teams* to
+*Users* (same PINs, now stored hashed). Phones that already have the old setup link keep
+working for 7 days; after that send the new link from **showSetupLink**.
 
 ## 4. PINs
-`setup` gives the admin and each leadman a **new random PIN**. They are in the **Teams** tab
-(column E) and in the execution log. Give each leadman only their own PIN. Keep the admin PIN
-private. You can change any PIN in the Teams tab at any time.
+`setup` gives the admin and each leadman a **new random PIN**, shown **once** in the execution
+log. **Write them down now**: the **Users** tab only keeps a hash (`h:…`). Give each leadman
+only their own PIN. Keep the admin PIN private.
+
+To change a PIN: type 4 new digits into that person's PIN cell in the **Users** tab. It works
+at once, signs that person out on every phone, and is replaced by its hash at the next sign-in.
 
 ## 5. Publish the backend
 1. In the Apps Script editor: **Deploy → New deployment** → gear icon → **Web app**.
@@ -52,20 +61,25 @@ Host it anywhere that serves plain files over **https**, for example:
 2. Choose **showSetupLink** → **Run** → **Execution log** shows a link like
    `https://your-app/?backend=https%3A%2F%2Fscript.google.com%2F…%2Fexec&key=abc123…`
 3. Send that link (Viber, Messenger, SMS) to each leadman and the admin. **Treat it like a password.**
+   It can connect new phones for **7 days**; run **showSetupLink** again for a fresh one. Each phone
+   swaps the link for its own device key the first time, and then forgets the link.
 4. On the phone: open the link → sign in with the PIN → browser menu → **Add to Home screen**.
    From then on, open the app from the home-screen icon. It works without signal.
 
 ## Day-to-day admin
 | Task | How |
 |---|---|
-| Lost phone / someone left | Change their PIN in the Teams tab (signs them out everywhere) |
+| Lost phone / someone left | Type a new PIN in the Users tab, or set Active = No (signs them out everywhere) |
 | Sign out every device | Apps Script → run **signOutEveryone** |
-| Setup link was leaked | Apps Script → run **newSetupKey** and send the new link. Phones already signed in keep working. |
-| Change a leadman | Teams tab: change the Leadman name and PIN. Add the new person in the app (Admin → team → Add to crew). |
+| Setup link was leaked | Apps Script → run **newSetupKey** and send the new link. Phones already connected keep working. |
+| A phone may be compromised | Run **forgetAllPhones**: every phone needs a new setup link |
+| "Too many wrong PINs" for everyone | Wait 15 minutes, or run **clearLoginLock**. Check the AuditLog tab for who tried. |
+| Change a leadman | Users tab: change the name and type a new PIN. Add the new person in the app (Admin → team → Add to crew). |
 | Backup | Sheet: **File → Make a copy** monthly. Photos are already in Drive. |
-| See who changed what | **Audit** tab |
+| See who changed what | Admin screen → **Audit log**, or the **AuditLog** tab. Run **verifyAuditLog** to check it was not edited by hand. |
+| See every version of a report | Admin screen → **Show reports** → **History**, or the **Revisions** tab |
 
 ## Do not
 - Rename, reorder or delete tabs or columns (the app relies on them). Editing values in the
-  **Teams** tab is fine.
+  **Users** and **Teams** tabs is fine. Do not edit AuditLog, Revisions or Sessions.
 - Share the Sheet or the photo folder with people who should not see all teams' data.

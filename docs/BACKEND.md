@@ -25,8 +25,10 @@ for the admin are in [`google-apps-script/SETUP.md`](../google-apps-script/SETUP
         └──────────────┬──────────────────────────┬─────────────┘
                        ▼                          ▼
           Google Sheet (database)        Google Drive (photos)
-          Teams · Roster · Attendance    Bridge NLEX Daily Report Photos/
-          Reports · Photos · Audit         <date>/<team>/<file>.jpg
+          Users · Teams · Roster ·       Bridge NLEX Daily Report Photos/
+          Attendance · DailyReports ·      <date>/<team>/<file>.jpg
+          Photos · Revisions ·
+          AuditLog · Sessions
 ```
 
 **Which option.** You asked for Google only, and for this app's size (4 teams, ~40
@@ -54,44 +56,33 @@ nothing extra and admin can open, filter and print the data directly in Sheets.
 - Photo previews in the app and Sheet need Drive link sharing. Some Google Workspace
   domains block that; photos are still stored, and admin opens them from Drive.
 - If someone edits the Sheet by hand (for example deletes a column), the app can break.
-  Only edit the **Teams** tab (PINs, names) by hand.
+  Only edit the **Users** (PINs, names, active) and **Teams** tabs by hand.
 
 ## 2. Database — Sheet tabs
 
 All cells are stored as plain text, so dates (`2026-09-27`), times and plate numbers stay
-exactly as sent. Times are Manila time, `yyyy-MM-dd HH:mm:ss`.
+exactly as sent. Times are Manila time, `yyyy-MM-dd HH:mm:ss`. Text starting with `= + - @`
+is stored with a leading `'` so Sheets never runs it as a formula.
 
-**Teams** (key: Team ID). The admin edits this tab. `setup()` gives everyone a random PIN; demo PINs 0000–4444 are never used in live mode.
-| Team ID | Team | Short Name | Leadman | PIN (4 digits) | Default Unit | Active (Yes/No) |
-|---|---|---|---|---|---|---|
-| admin | Operations Admin | Admin | | *random* | | Yes |
-| team1 | Bridge RM_Team 1 | RM Team 1 | Pijay Tanjeco | *random* | Locations | Yes |
-| team2 | Segment 10 Scupper Drain | Segment 10 | Glenn Butiong | *random* | KM | Yes |
-| team3 | Bridge Epoxy 1 | Epoxy 1 | Allan Miranda | *random* | Locations | Yes |
-| team4 | Bridge Epoxy 2 | Epoxy 2 | Gilbert Rivera | *random* | Locations | Yes |
-
-**Roster** (key: personId, e.g. `team2-abraham-balmeo`). Seeded with the 34 real crew
-members, including the leadmen.
-`personId, teamId, name, role (Leadman/Skilled/Crew), status (Active/Archived), createdAt, updatedAt, archivedAt, editedBy`
-
-**Attendance** (key: `teamId|reportDate|personId`)
-`reportDate, teamId, personId, name, role, status (Present/Absent), absenceReason (Sick/Leave/No show/Other), submittedAt, submittedBy, createdAt, updatedAt`
-
-**Reports** (key: `teamId|reportDate`, one row per team per day)
-`reportDate, teamId, team, leadman, state (draft/submitted), fromTime, toTime, location, activityDetails, status (Ongoing/Complete), target, actual, unit (KM/Locations), targetManpower, actualManpower, plateNumber, remarks, crewPresent, absentList, beforePreview (=IMAGE), afterPreview (=IMAGE), beforePhotoId, afterPhotoId, attendanceSubmittedAt, submittedAt, submittedBy, createdAt, updatedAt, editedBy, version`
+| Tab | Key | Holds |
+|---|---|---|
+| **Users** | userId (`admin`, `lead-team2`…) | name, role (`admin`/`leadman`), teamId, PIN **hash**, active |
+| **Teams** | teamId | name, short name, default unit, active |
+| **Roster** | personId (`team2-abraham-balmeo`) | teamId, name, role (Leadman/Skilled/Crew), status (Active/Archived) |
+| **Attendance** | `teamId\|date\|personId` | reportId, status (**Present/Absent/Leave/Rest Day/Sick/Other**), note (required for Other), submittedAt/By, rev |
+| **DailyReports** | `teamId\|date` | server-made **reportId**, state (draft/submitted), all form fields, crew present, photo IDs + `=IMAGE` previews, **version** (submissions), **rev** (every change), firstSubmittedAt, late, reopen reason, last request ID |
+| **Photos** | photoId | reportId, client photo ID, team, leadman, type, status (Active/Replaced/Removed), location + capture time (phone), upload time, Drive file, bytes |
+| **Revisions** | revisionId | JSON snapshot of the report and its attendance each time it is submitted, reopened, or its attendance changes |
+| **AuditLog** | (append-only) | who, role, team, action, entity + ID, before, after, reason, request ID, device, **chain hash** |
+| **Sessions** | sessionId | user, role, team, device, created, expires, revoked |
 
 - **draft**: attendance is in, but the report is not submitted yet (or it was reopened).
-- **submitted**: accepted by the server. The phone locks the fields.
-- **locked**: a leadman can change today's and yesterday's report only. Older reports are
-  locked for them (the server refuses changes); admin can still change them.
-
-**Photos** (key: photoId). Every upload is kept, including replaced and removed photos.
-`photoId, teamId, reportDate, type (before/after), status (Active/Replaced/Removed), fileId, fileUrl, thumbnailUrl, originalFilename, uploadedAt, uploadedBy`
-
-**Audit** (append-only)
-`at, user, role, teamId, reportDate, action, changes`
-Examples: `login`, `attendance submitted — 8/9 present. Absent: Abraham Balmeo (Leave)`,
-`report resubmitted (v2) — location: "Km.11" → "Km.12"; after photo replaced`, `crew archived`, `export`.
+- **submitted**: accepted by the server. The phone locks the fields, attendance and photos.
+- **locked**: a leadman can change today's and yesterday's report only; admin any past day.
+- Nothing is deleted: replaced photos stay (status Replaced), a reopened report keeps a
+  snapshot of the submitted version, archived crew keep their attendance.
+- `Users`, `AuditLog`, `Revisions` and `Sessions` are protected (warning on hand edits).
+  `verifyAuditLog()` recomputes the hash chain and reports the first row edited by hand.
 
 ## 3. Photo storage (Google Drive)
 
@@ -111,54 +102,73 @@ Bridge NLEX Daily Report Photos/          (created by setup(), in the admin's Dr
 
 ## 4. API (Apps Script `doPost` actions)
 
-All calls are `POST` with a JSON body `{ action, token, device, ... }` and return `{ ok, ... }`
-or `{ ok:false, error, auth?, missing? }`.
+All calls are `POST` with a JSON body `{ action, token, requestId?, ... }` and return `{ ok, ... }`
+or `{ ok:false, error, auth?, missing?, conflict?, denied? }`.
+Every write takes the script lock. Writes carry `requestId` (reused on retry → the server
+returns the first answer instead of saving twice) and `baseRev` (the revision the phone last
+saw → `conflict` if another device changed the report since).
 
 | Action | Who | Does |
 |---|---|---|
-| `login {pin, setupKey}` | anyone with the setup link | Checks the PIN, returns a signed token and the user (role, team) |
-| `me` | signed in | Returns the current user |
-| `load {days}` | admin: all teams · leadman: own team | Teams, roster, attendance, reports, active photos for the last N days; Sheet link (admin) |
-| `saveAttendance {teamId, reportDate, people[]}` | own team / admin | Validates absence reasons, writes Attendance + Reports summary |
-| `uploadPhoto {teamId, reportDate, type, dataUrl, originalFilename}` | own team / admin | Saves to Drive, adds to Photos (replaces the previous active one) |
-| `removePhoto {teamId, reportDate, type}` | own team / admin | Marks the active photo Removed |
-| `submitReport {teamId, reportDate, report}` | own team / admin | Re-checks every rule, sets state=submitted, submittedAt/By, version+1, audit diff |
-| `reopenReport {teamId, reportDate}` | own team (today/yesterday) / admin | Sets state back to draft so it can be edited |
+| `enroll {setupKey}` | phone with a valid, unexpired setup link | Returns a signed per-phone **device key**; the phone then deletes the setup key |
+| `login {pin, deviceKey}` | enrolled phone | Checks the PIN hash, creates a Sessions row, returns a signed token |
+| `logout` | signed in | Revokes the session |
+| `load {days}` | admin: all teams · leadman: own team | Teams, roster, attendance, reports, active photos; Sheet link (admin) |
+| `saveAttendance {teamId, reportDate, people[], baseRev}` | own team / admin | Every active crew member needs an explicit status; Other needs a note; unknown people refused |
+| `uploadPhoto {teamId, reportDate, type, clientId, dataUrl, capturedAt, location}` | own team / admin | Same `clientId` again → same photo back (no duplicate). Saves to Drive, links it to the reportId |
+| `removePhoto {teamId, reportDate, photoId}` | own team / admin | The photo must belong to that report; marked Removed (file kept) |
+| `submitReport {teamId, reportDate, report, baseRev, beforePhotoId, afterPhotoId}` | own team / admin | Re-checks every rule (below), photo IDs must be the report's active ones, version+1, revision snapshot, audit before/after |
+| `reopenReport {teamId, reportDate, reason, baseRev}` | own team (today/yesterday) / admin | Reason required; snapshot of the submitted version kept |
 | `addMember / archiveMember / restoreMember` | admin | Roster changes (the leadman row cannot be archived) |
-| `exportCsv {from, to}` | admin | CSV built from the Sheet (default last 30 days) plus an `.xlsx` download link |
+| `exportCsv {from, to}` | admin | CSV for up to 366 days, formula-safe cells, plus an `.xlsx` link |
+| `adminReports {from, to}` | admin | Every team × day: submitted/draft/missing, late/overdue, attendance and photo completeness, revision count |
+| `revisions {reportId}` / `auditLog {from, to, teamId}` | admin | Revision history of one report / audit log viewer |
 
-Maintenance functions to run from the Apps Script editor: `setup()`, `showSetupLink()`,
-`newSetupKey()`, `signOutEveryone()`.
+**Report rules enforced by the server** (the phone shows the same list before sending):
+valid `HH:mm` times with From before To; location, details, plate required (length limits);
+status Ongoing/Complete and unit KM/Locations only; target and actual numbers 0–100 (whole
+numbers for Locations); manpower whole numbers 1–60; remarks required when the work is
+Ongoing, actual is below target, or actual manpower is above the Present count; Before photo
+always; After photo when Complete; attendance submitted first.
+
+Maintenance functions to run from the Apps Script editor: `setup()` (also upgrades an older
+Sheet), `showSetupLink()`, `newSetupKey()`, `signOutEveryone()`, `forgetAllPhones()`,
+`clearLoginLock()`, `verifyAuditLog()`.
 
 ## 5. Sign-in and roles
 
-- **Setup link** → `https://<app>/?backend=<web app URL>&key=<setup key>`. The admin sends it
-  to each phone once. The app stores it and removes it from the address bar. Without the
-  setup key the server refuses to check a PIN at all, so knowing the web app URL is not enough.
-- **PIN** (4 digits, from the Teams tab) → the server returns a **signed session token**
-  (HMAC-SHA256 with a secret kept in Script Properties), valid for 14 days. The token says
-  which team the user belongs to. The phone stays signed in, including offline, until logout or expiry.
-- **Brute-force protection**: after 5 wrong PINs a device is blocked for 15 minutes, and after
-  30 wrong attempts in an hour sign-in is paused for everyone.
-- **Revoking access**:
-  - Change a person's PIN in the Teams tab → that person is signed out everywhere.
-  - Set `Active = No` → that person is blocked.
-  - Run `signOutEveryone()` → everybody must sign in again.
-  - Run `newSetupKey()` → old setup links stop working.
-- **Roles**:
-  - **Leadman**: reads and writes only their own team. Can write today and yesterday only. Cannot change the roster or export.
-  - **Admin**: reads and writes every team and any date, manages the roster, exports.
+- **Setup link** → `https://<app>/?backend=<web app URL>&key=<setup key>`, valid for 7 days
+  (`showSetupLink()` makes a new one when it has expired). On first open the phone swaps the
+  key for its own signed **device key** and deletes the setup key from storage and the address bar.
+- **PIN** (4 digits) → checked against an HMAC hash in the Users tab. To change a PIN, type
+  4 new digits into the cell; it is hashed at the next sign-in. The server creates a
+  **Sessions** row and returns a signed token (HMAC-SHA256, secret in Script Properties):
+  14 days for leadmen (they work offline), 12 hours for admin.
+- Every request checks: signature → not expired → session row exists and is not revoked →
+  user active → PIN unchanged since sign-in → team active.
+- **Brute-force protection**: 5 wrong PINs lock that phone for 15 min; 20 wrong PINs across
+  all phones in 15 min pause sign-in for everyone (logged in the audit log; `clearLoginLock()`
+  lifts it). Wrong setup keys are rate-limited separately and cannot lock PIN sign-in.
+- **Revoking access**: change the PIN or set Active = No (that person, everywhere) ·
+  **Log out** (that session) · `signOutEveryone()` · `newSetupKey()` (old links stop enrolling)
+  · `forgetAllPhones()` (every phone needs a new setup link).
+- **Roles**: **Leadman** reads and writes only their own team, today and yesterday; cannot
+  change the roster, export, or see other teams, history across teams or the audit log.
+  **Admin** reads and writes every team and past day, manages the roster, exports, sees
+  revisions and the audit log.
 
 ## 6. Access rules (what row-level security would do in Supabase)
 
-The Sheet itself is private to the admin's Google account. Every action checks, on the server:
-1. The token signature is valid and not expired, and the PIN has not changed since it was issued.
-2. `needTeam_`: a leadman's `teamId` must equal the requested `teamId`; otherwise the request is refused.
-3. `needWritableDate_`: a leadman can write only today or yesterday (Manila), never a future date.
-4. `needAdmin_`: roster changes and export are admin only.
-5. `load` filters every tab by team for leadmen and hides the Sheet link from them.
-6. Text typed on a phone is stored as text and never runs as a spreadsheet formula. CSV
-   cells starting with `= + - @` are prefixed with `'` so Excel won't run them either.
+The server trusts nothing the phone says about identity, team, role, state, totals or IDs:
+1. `verify_`: token → session → user → role (above).
+2. `teamFor_`: a leadman's team comes from the session. A different `teamId` in the request
+   is refused **and logged** as `DENIED team access`.
+3. `writableDate_`: a real calendar date, not in the future; leadman only today/yesterday.
+4. Admin-only actions are refused (and logged) for leadmen before any code runs.
+5. Crew IDs must be on that team's active roster; photo IDs must belong to that team and day.
+6. The server computes crew present, versions, revisions, report IDs, late flags and states.
+7. `load` filters every tab by team for leadmen and hides the Sheet link from them.
+8. CSV cells starting with `= + - @` (or tab/CR) are prefixed with `'`.
 
 ## 7. Moving from the browser-storage prototype
 
@@ -193,42 +203,53 @@ The Sheet itself is private to the admin's Google account. Every action checks, 
 | `frontend/vite.config.js` | PWA: installable, all app files cached for offline use; backend calls never cached |
 
 **Offline rules in live mode**
-- With no signal the app shows a banner. The leadman keeps working: form fields autosave
-  on the phone, and photos are kept on the phone marked **Not uploaded yet**.
-- **Submit** needs signal and a server confirmation. If there is no signal or the server
-  fails, the app says *NOT submitted* and keeps the draft. It never shows a report as
-  submitted unless the server confirmed it.
-- Photos taken offline upload by themselves when signal returns, and again before submit.
+- With no signal the app shows a banner. The leadman keeps working: form fields and
+  attendance marks autosave on the phone (localStorage, small). Photos are stored in
+  **IndexedDB** (full size, with a watermarked evidence copy: type, team, date/time, leadman,
+  location) and marked **Not uploaded yet**. A storage-full error is shown, never ignored.
+- `navigator.onLine` is only a hint. Any call that does not come back with a proper answer
+  counts as *not confirmed*: the data stays on the phone and the screen says so.
+- **Submit** needs a server confirmation. If the answer is lost (signal drops, app killed), the
+  phone remembers the request ID; the next Submit re-sends it and the server returns the first
+  result instead of saving twice. After a reload the phone shows what the server has.
+- Photos upload by themselves when signal returns, every minute after a failure, and
+  before submit. Photos from an earlier day still upload for their own day.
 - The first sign-in needs signal. After that the app opens offline and stays signed in.
 
-## 10. Testing checklist (on real phones, after deployment)
+## 10. Testing checklist
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 51 backend checks
-cd frontend && npm run build && node tests/live-e2e.mjs   # 41 end-to-end checks (leadman + admin)
+node google-apps-script/test/backend.test.cjs      # 126 backend checks, incl. adversarial cases
+cd frontend && npm run test:e2e                     # 70 end-to-end checks: phones + admin in real browsers
 ```
+The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake
+tokens, duplicate submit, double tap, offline → reconnect, failed photo upload, edited
+localStorage, invalid dates/times/numbers, Complete without After photo, two phones editing
+the same report, CSV formula payloads, unauthorised reopen, reload/lost answer during submit,
+and upgrading an old Sheet in place.
 
 **Leadman (Android/iPhone, mobile data)**
 - [ ] Open the setup link → PIN screen, no "Prototype only" bar, no Demo PINs box.
 - [ ] Wrong PIN → "Wrong PIN". Own PIN → own name and team shown. **Add to Home Screen** works.
-- [ ] Crew list matches the Roster tab.
-- [ ] Submit report before attendance → "Submit attendance first".
-- [ ] Mark someone absent without a reason → blocked. With a reason → "Attendance submitted" and rows appear in the Attendance tab.
-- [ ] Take the Before photo with the camera → "uploaded to Google Drive"; the file is in Drive under today/team.
-- [ ] Status Complete without an After photo → blocked. Ongoing → After photo optional.
-- [ ] Airplane mode → orange "No signal" banner. Submit → "NOT submitted". The Sheet is unchanged.
+- [ ] Attendance: everyone shows **Not verified**; Submit stays disabled until every person is marked.
+- [ ] Mark someone **Not present → Other** without a note → blocked. With a note → saved.
+- [ ] **Take photo** opens the camera; **or choose from gallery** opens the gallery. The file in
+      Drive has the watermark band at the bottom.
+- [ ] Complete without an After photo → blocked. Ongoing without remarks → blocked.
+- [ ] Airplane mode → "No signal" banner. Submit → "NOT submitted". The Sheet is unchanged.
 - [ ] Take a photo in airplane mode → "Not uploaded yet". Turn data on → it uploads by itself.
-- [ ] Submit with signal → "Report submitted at …", fields locked, a Reports row shows `submitted` with photo previews.
-- [ ] Edit report → unlocks. Change the location, resubmit → version 2; the Audit tab shows the change.
+- [ ] Submit with signal → "Report submitted at …", fields locked.
+- [ ] Edit report → asks for a reason → unlocks. Resubmit → version 2; Revisions and AuditLog tabs show it.
+- [ ] Two phones on the same team: change attendance on one, then the other → "changed on another device".
 - [ ] Close the app, airplane mode, open from the home screen → the app opens, still signed in.
-- [ ] Log out → PIN screen.
+- [ ] Log out → PIN screen; the Sessions row shows Revoked.
 
 **Admin (computer and phone)**
-- [ ] Admin PIN (from the Teams tab) → command center. Every team's submission appears within 60 s, or immediately with **Refresh**.
-- [ ] Needs attention lists teams missing attendance or reports.
-- [ ] Team tab → today + history rows, roster. Add a crew member → it appears on that leadman's phone after refresh.
-- [ ] Remove → "Tap to confirm" → archived. Restore works. The leadman cannot be removed.
-- [ ] **Export CSV** opens in Excel with correct columns and photo links. **Download .xlsx** works while signed in to Google.
-- [ ] Change a leadman's PIN in the Teams tab → that phone is asked to sign in again.
-- [ ] With leadman A signed in, check you cannot see or change team B (the app only offers your own team; the server refuses others).
+- [ ] Admin PIN → command center. Every team's submission appears within 60 s, or with **Refresh**.
+- [ ] **Reports, history & audit**: choose dates → **Show reports** lists missing/late days,
+      attendance and photo completeness; **History** shows revisions; **Audit log** shows DENIED attempts in red.
+- [ ] **Export CSV** exports the chosen dates; opens in Excel with photo links.
+- [ ] Add / remove (confirm) / restore crew. The leadman cannot be removed.
+- [ ] Type a new PIN into the Users tab → that phone must sign in again; the cell turns into `h:…` after the next sign-in.
+- [ ] Run `verifyAuditLog()` → "Audit log intact".

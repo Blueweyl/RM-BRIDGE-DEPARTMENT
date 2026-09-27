@@ -60,6 +60,10 @@ function Login({ v }) {
               <div style={css('display:flex;gap:16px;')}>
                 {login.dots.map((d, i) => <div key={i} style={css(d.style)} />)}
               </div>
+              {login.checking && <div role="status" style={css('font-size:14px;font-weight:700;color:#2B4A73;')}>Checking PIN…</div>}
+              {login.message && (
+                <div role="alert" style={css('background:#FBE0DD;color:#A8261B;font-weight:700;font-size:14px;padding:8px 14px;border-radius:8px;text-align:center;')}>{login.message}</div>
+              )}
               {login.error && (
                 <div role="alert" style={css('background:#FBE0DD;color:#A8261B;font-weight:700;font-size:14px;padding:8px 14px;border-radius:8px;text-align:center;white-space:nowrap;')}>Wrong PIN. Please try again.</div>
               )}
@@ -86,12 +90,14 @@ function Login({ v }) {
           )}
         </div>
 
-        <div style={css('background:#1B3A63;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;')}>
-          <div style={css("font-family:'JetBrains Mono',monospace;font-size:10px;color:#AFC0D6;letter-spacing:1px;text-transform:uppercase;")}>Demo PINs</div>
-          <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;color:#FFFFFF;')}>
-            <span>0000 · Admin</span><span>1111 · RM Team 1</span><span>2222 · Segment 10</span><span>3333 · Epoxy 1</span><span>4444 · Epoxy 2</span>
+        {login.showDemoPins && (
+          <div style={css('background:#1B3A63;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;')}>
+            <div style={css("font-family:'JetBrains Mono',monospace;font-size:10px;color:#AFC0D6;letter-spacing:1px;text-transform:uppercase;")}>Demo PINs</div>
+            <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;color:#FFFFFF;')}>
+              <span>0000 · Admin</span><span>1111 · RM Team 1</span><span>2222 · Segment 10</span><span>3333 · Epoxy 1</span><span>4444 · Epoxy 2</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -113,9 +119,16 @@ function Admin({ v }) {
           </div>
         </div>
         <div style={css('display:flex;gap:10px;flex-wrap:wrap;')}>
-          <button type="button" disabled aria-disabled="true" aria-label="Import Excel, coming soon" title="Coming soon" style={css("white-space:nowrap;min-height:44px;background:transparent;border:1.5px dashed #5E7593;color:#AFC0D6;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:not-allowed;")}>Import Excel · Coming soon</button>
-          <button onClick={admin.onExport} aria-label="Download report as CSV file for Excel" style={css("white-space:nowrap;min-height:44px;background:#E8760F;border:none;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:pointer;")}>Export CSV (Excel)</button>
-          <button onClick={admin.resetDemo} style={css('white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Reset demo data</button>
+          {admin.live ? (
+            <>
+              <button onClick={admin.refresh} style={css('white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>↻ Refresh</button>
+              {admin.hasSheet && <a href={admin.sheetUrl} target="_blank" rel="noopener noreferrer" style={css('white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;text-decoration:none;')}>Open Google Sheet</a>}
+            </>
+          ) : (
+            <button type="button" disabled aria-disabled="true" aria-label="Import Excel, coming soon" title="Coming soon" style={css("white-space:nowrap;min-height:44px;background:transparent;border:1.5px dashed #5E7593;color:#AFC0D6;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:not-allowed;")}>Import Excel · Coming soon</button>
+          )}
+          <button onClick={admin.onExport} aria-label="Download report as CSV file for Excel" style={css("white-space:nowrap;min-height:44px;background:#E8760F;border:none;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:pointer;")}>{admin.exportLabel}</button>
+          {!admin.live && <button onClick={admin.resetDemo} style={css('white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Reset demo data</button>}
           <button onClick={v.logout} style={css('white-space:nowrap;min-height:44px;background:#1B3A63;border:none;color:#FFFFFF;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Log out</button>
         </div>
       </div>
@@ -126,6 +139,7 @@ function Admin({ v }) {
           <div style={css('display:flex;align-items:center;gap:10px;flex-wrap:wrap;')}>
             <span style={css('font-size:13px;color:#33404F;overflow-wrap:anywhere;')}>{admin.exportLine}</span>
             <button onClick={admin.copyCsv} aria-label="Copy last export as CSV text" style={css('min-height:44px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:8px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;')}>Copy CSV</button>
+            {admin.hasXlsx && <a href={admin.xlsxUrl} target="_blank" rel="noopener noreferrer" style={css('min-height:44px;display:inline-flex;align-items:center;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:8px;padding:0 12px;font-size:13px;font-weight:700;white-space:nowrap;text-decoration:none;')}>Download .xlsx</a>}
           </div>
         )}
       </div>
@@ -302,6 +316,11 @@ function ActivityTab({ cur }) {
                 <input type="number" inputMode="decimal" value={cur.form.actualLoc} onChange={cur.set.actualLoc} style={css(NUM_INPUT)} />
               </label>
             </div>
+            <div role="group" aria-label="Unit for target and actual" style={css('display:grid;grid-template-columns:auto 1fr 1fr;align-items:center;gap:8px;')}>
+              <span style={css('font-size:13px;font-weight:700;color:#33404F;')}>Unit</span>
+              <button type="button" aria-pressed={cur.isKM} onClick={cur.setKM} style={css(cur.kmStyle)}>KM</button>
+              <button type="button" aria-pressed={cur.isLoc} onClick={cur.setLoc} style={css(cur.locStyle)}>Locations</button>
+            </div>
           </div>
 
           <div style={css(CARD)}>
@@ -377,14 +396,14 @@ function ActivityTab({ cur }) {
             <div role="status" aria-live="polite" style={css(cur.saveLineStyle)}>{cur.saveLine}</div>
             <div style={css('display:flex;gap:10px;')}>
               <button onClick={cur.saveDraft} style={css("flex:1;min-height:56px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;cursor:pointer;")}>Save draft</button>
-              <button onClick={cur.submitAct} style={css("flex:2;min-height:56px;background:#E8760F;border:none;color:#FFFFFF;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;")}>Submit report</button>
+              <button onClick={cur.submitAct} style={css("flex:2;min-height:56px;background:#E8760F;border:none;color:#FFFFFF;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;")}>{cur.submitLabel}</button>
             </div>
           </>
         )}
         {cur.actDone && (
           <div style={css('display:flex;gap:10px;')}>
             <div style={css('flex:2;display:flex;align-items:center;font-weight:800;font-size:15px;color:#17693F;')}>{cur.submittedLabel}</div>
-            <button onClick={cur.editAct} style={css("flex:1;min-height:56px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;cursor:pointer;")}>Edit report</button>
+            <button onClick={cur.editAct} style={css("flex:1;min-height:56px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;cursor:pointer;")}>{cur.editLabel}</button>
           </div>
         )}
       </div>
@@ -513,6 +532,11 @@ export default function View({ v }) {
   return (
     <>
       {v.showNav && <PrototypeNav v={v} />}
+      {v.offline && (
+        <div role="status" style={css('position:sticky;top:0;z-index:70;min-height:40px;display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px;background:#6B3A00;color:#FFFFFF;font-size:14px;font-weight:700;text-align:center;')}>
+          No signal — keep working, everything is saved on this phone. Submitting needs signal.
+        </div>
+      )}
       {v.isLogin && <Login v={v} />}
       {v.isAdmin && <Admin v={v} />}
       {v.isTeam && <Team key={v.cur.id} v={v} />}

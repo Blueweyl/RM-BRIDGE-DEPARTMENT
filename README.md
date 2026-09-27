@@ -1,7 +1,6 @@
 # RM Bridge Department — Bridge NLEX Daily Report
 
-Clickable prototype of the daily field-ops reporting app for the Savvice NLEX
-bridge / road maintenance crews. Leadmen use it on their phones for attendance,
+Daily field-ops reporting app for the Savvice NLEX bridge / road maintenance crews. Leadmen use it on their phones for attendance,
 activity reports and before/after photos. Admin uses it on desktop for the
 command view, crew roster and CSV export.
 
@@ -9,8 +8,10 @@ command view, crew roster and CSV export.
 
 | Path | What it is |
 |---|---|
-| `frontend/` | **The front end.** A standalone React + Vite app built from the v3 design, with the Savvice logo. |
-| `prototype/Bridge NLEX Daily Report.dc.html` | **Current app (v3).** Template markup plus one `Component` logic class. |
+| `frontend/` | **The app.** React + Vite, offline-capable, live mode backed by Google. |
+| `google-apps-script/` | **The backend.** `Code.gs` for the Google Sheet, setup guide, tests. |
+| `docs/BACKEND.md` | Backend design: tabs, photos, API, roles, access rules, test checklist. |
+| `prototype/Bridge NLEX Daily Report.dc.html` | Original Claude Design prototype (v3), browser storage only. |
 | `prototype/support.js` | DC runtime, auto-generated. Do not edit. Loads React 18.3.1 + Babel from unpkg. |
 | `prototype/image-slot.js` | `<image-slot>` photo component (used by v1 only). |
 | `prototype/tests/tests-v3.js` | In-browser functional test (PIN login, submit rules, photos, CSV export, drafts). |
@@ -21,27 +22,34 @@ command view, crew roster and CSV export.
 
 ## Front end (`frontend/`)
 
-Does not need `support.js` or unpkg. React is bundled, so it runs from any static host.
+A standalone React + Vite app built from the v3 design, with Savvice branding. It installs to
+the phone's home screen and works without signal. It runs in two modes:
+
+- **Live**: connected to the Google backend (Google Sheet + Drive). Real PIN sign-in, each
+  leadman sees only their own team, and reports sync to the admin on any device. Turned on
+  per phone by opening the admin's setup link.
+- **Demo**: no backend; data stays in the browser (the original prototype behaviour).
 
 ```sh
 cd frontend
 npm install
-npm run dev      # local dev server
-npm run build    # production files go to frontend/dist/
+npm run dev            # local dev server (demo mode)
+npm run build          # production files → frontend/dist/
+npm run test:backend   # 51 backend checks
+npm run test:e2e       # 41 end-to-end checks: leadman phone + admin computer against the real backend code
 ```
 
-Deploy by uploading `frontend/dist/` to any static host (Netlify, Vercel, GitHub Pages or a plain web server).
-It builds with relative paths, so it also works from a sub-folder.
+- `src/App.jsx`: the design's logic class; lines marked `// live` hand off to `live.js`.
+- `src/live.js`, `src/api.js`: backend calls, sign-in session, offline photo queue.
+- `src/View.jsx`: the screens (Login, Admin, Leadman Activity/Attendance/History).
 
-- `src/App.jsx`: the design's logic class, copied unchanged from the v3 prototype.
-- `src/View.jsx`: the screens (Login, Admin, Leadman Activity/Attendance/History), matching the v3 template.
-- `src/css.js`: converts the design's CSS-text styles into React style objects.
+## Backend (`google-apps-script/`)
 
-URL options: `?screen=admin` or `?screen=team1` opens on that screen. `?nav=0` hides the
-"Prototype only" screen jumper. `?after=1` makes the After photo always required.
+The Google Sheet is the database and Google Drive holds the photos. Google Apps Script is the API.
 
-Savvice branding: logo card on the login screen, logo in the admin header, a logo strip at
-the top of each leadman screen, and a favicon/home-screen icon made from the Savvice check mark.
+- **Setup (admin, about 20 minutes)**: [`google-apps-script/SETUP.md`](google-apps-script/SETUP.md)
+- **Design** (architecture, tabs, photo folders, API, roles, access rules, migration, test checklist):
+  [`docs/BACKEND.md`](docs/BACKEND.md)
 
 ## Running the original prototype
 

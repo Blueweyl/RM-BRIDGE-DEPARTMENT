@@ -1,14 +1,17 @@
 // Bridge NLEX Daily Report — app logic.
 // Ported from the Claude Design prototype (prototype/Bridge NLEX Daily Report.dc.html, v3).
-// The class body is the design's logic unchanged; View renders its template.
+// The class body is the design's logic; lines marked `live` hand off to live.js when a
+// Google backend is configured (see docs/BACKEND.md). Without one it runs as the offline demo.
 import React from 'react';
 import View from './View.jsx';
+import * as api from './api.js';
+import { liveMethods } from './live.js';
 
 export default class Component extends React.Component {
   static defaultProps = { startScreen: 'login', afterPhotoAlwaysRequired: false, prototypeNav: true };
 
   static T = [
-    { id: 'team1', short: 'RM Team 1', name: 'Bridge RM_Team 1', leadman: 'Pijay Tanjeco', pin: '1111',
+    { id: 'team1', short: 'RM Team 1', name: 'Bridge RM_Team 1', leadman: 'Pijay Tanjeco', pin: '1111', unit: 'Locations',
       crew: [['Justin Billones','Skilled'],['Ignacio Alcoriza Jr.','Crew'],['Alvin Angelo','Crew'],['Joven Blanza','Crew'],['Rocky Miranda','Crew'],['Richard Candelaria','Crew'],['Crisostomo Sebuc','Crew']],
       absent: { 'Rocky Miranda': 'Sick' },
       seed: { att: '6:58 AM', act: '3:42 PM', before: true, after: true },
@@ -17,7 +20,7 @@ export default class Component extends React.Component {
         { date: '2026-09-26', location: 'MABALACAT RIVER BRIDGE', details: 'Parapet cleaning, Grass cutting, Trimming trees', status: 'COMPLETE', att: '7/8', photos: 2 },
         { date: '2026-09-25', location: 'STO. TOMAS RIVER BRIDGE', details: 'Deck slab cleaning, Slope protection cleaning', status: 'COMPLETE', att: '8/8', photos: 2 },
         { date: '2026-09-23', location: 'PAMPANGA RIVER BRIDGE North bound', details: 'Girder and pier cleaning, Grass cutting', status: 'COMPLETE', att: '7/8', photos: 2 } ] },
-    { id: 'team2', short: 'Segment 10', name: 'Segment 10 Scupper Drain', leadman: 'Glenn Butiong', pin: '2222',
+    { id: 'team2', short: 'Segment 10', name: 'Segment 10 Scupper Drain', leadman: 'Glenn Butiong', pin: '2222', unit: 'KM',
       crew: [['Glen Jorick De Mesa','Skilled'],['Justine Gregg Baylon','Skilled'],['John Christian Bernardo','Crew'],['Ian Enriquez','Crew'],['Joanner Royce Quilao','Crew'],['Rolando Faustino','Crew'],['Richard Santiago','Crew'],['Abraham Balmeo','Crew']],
       absent: { 'Abraham Balmeo': 'Leave', 'Rolando Faustino': 'No show' },
       seed: { att: '7:05 AM', act: null, before: true, after: false },
@@ -26,7 +29,7 @@ export default class Component extends React.Component {
         { date: '2026-09-26', location: 'Km.10+020 to Km.9+400 C3 exit ramp', details: 'Cleaning of clogged scupper drain', status: 'COMPLETE', att: '8/9', photos: 2 },
         { date: '2026-09-25', location: 'Km.12+500 NB main line', details: 'Cleaning of clogged scupper drain, debris removal', status: 'COMPLETE', att: '9/9', photos: 2 },
         { date: '2026-09-23', location: 'Km.9+400 to Km.8+800 C4 entry ramp', details: 'Cleaning of clogged scupper drain', status: 'ONGOING', att: '7/9', photos: 1 } ] },
-    { id: 'team3', short: 'Epoxy 1', name: 'Bridge Epoxy 1', leadman: 'Allan Miranda', pin: '3333',
+    { id: 'team3', short: 'Epoxy 1', name: 'Bridge Epoxy 1', leadman: 'Allan Miranda', pin: '3333', unit: 'Locations',
       crew: [['Elmer Dordulo','Skilled'],['Edwin Lozano','Skilled'],['R-Jay John Aquino','Crew'],['Mark Joseph De Guzman','Crew'],['Edbryan Dela Cruz','Crew'],['Mark Ian Dungca','Crew'],['Johnry Manese','Crew'],['Eroll Pangilinan','Crew']],
       absent: { 'Eroll Pangilinan': 'Sick' },
       seed: { att: null, act: null, before: true, after: false },
@@ -35,7 +38,7 @@ export default class Component extends React.Component {
         { date: '2026-09-26', location: 'CANDABA VIADUCT North bound', details: 'Inject epoxy girder 1-2, Pier 109-110', status: 'ONGOING', att: '9/9', photos: 2 },
         { date: '2026-09-25', location: 'CANDABA VIADUCT South bound', details: 'Inject epoxy girder 6-7, Pier 113-114', status: 'COMPLETE', att: '8/9', photos: 2 },
         { date: '2026-09-23', location: 'CANDABA VIADUCT South bound', details: 'Surface preparation, crack sealing', status: 'COMPLETE', att: '8/9', photos: 2 } ] },
-    { id: 'team4', short: 'Epoxy 2', name: 'Bridge Epoxy 2', leadman: 'Gilbert Rivera', pin: '4444',
+    { id: 'team4', short: 'Epoxy 2', name: 'Bridge Epoxy 2', leadman: 'Gilbert Rivera', pin: '4444', unit: 'Locations',
       crew: [['Alvin Galang','Skilled'],['Ivan Cabunag','Crew'],['AJ Enriquez','Crew'],['Jaypee Occidental','Crew'],['Edgar Ortillo','Crew'],['Voltaire Rotamula','Crew'],['Joshua Andrei Tayco','Crew']],
       absent: { 'Voltaire Rotamula': 'Leave' },
       seed: { att: '7:10 AM', act: null, before: true, after: true },
@@ -62,10 +65,12 @@ export default class Component extends React.Component {
     super(props);
     const T = Component.T, crews = {}, att = {}, attAt = {}, actAt = {}, forms = {}, photos = {}, tabs = {}, showErr = {}, attErr = {}, newMember = {}, draftAt = {};
     const md = this.stamp(), today = this.dayKey();
+    this.live = api.isLive();                                   // live
+    const sess = this.live ? api.session() : null;              // live
     const R = this.lsGet('roster') || {}, D = this.lsGet('day.' + today) || {};
     this.arch = this.lsGet('archive') || {};
     const meta = this.lsGet('meta'); if (!meta) this.lsSet('meta', { firstDay: today });
-    const demoDay = !meta || meta.firstDay === today, last = demoDay ? null : this.lastDay(today);
+    const demoDay = !this.live && (!meta || meta.firstDay === today), last = demoDay ? null : this.lastDay(today);
     const has = (o, id) => !!o && Object.prototype.hasOwnProperty.call(o, id);
     T.forEach(t => {
       crews[t.id] = has(R.crews, t.id) ? R.crews[t.id] : [{ name: t.leadman, role: 'Leadman' }].concat(t.crew.map(([name, role]) => ({ name, role })));
@@ -77,7 +82,7 @@ export default class Component extends React.Component {
       const blank = { from: (lf && lf.from) || t.form.from, to: (lf && lf.to) || t.form.to, location: '', details: '', status: 'ONGOING', targetLoc: '', actualLoc: '', plate: (lf && lf.plate) || t.form.plate, targetMH: (lf && lf.targetMH) || t.form.targetMH, actualMH: '', remarks: '' };
       attAt[t.id] = has(D.attAt, t.id) ? D.attAt[t.id] : (demoDay ? t.seed.att : null);
       actAt[t.id] = has(D.actAt, t.id) ? D.actAt[t.id] : (demoDay ? t.seed.act : null);
-      forms[t.id] = { ...(demoDay ? t.form : blank), ...(has(D.forms, t.id) ? D.forms[t.id] : {}) };
+      forms[t.id] = { unit: (lf && lf.unit) || t.unit, ...(demoDay ? t.form : blank), ...(has(D.forms, t.id) ? D.forms[t.id] : {}) };
       photos[t.id] = has(D.photos, t.id) ? D.photos[t.id] : !demoDay ? { before: null, after: null } : {
         before: t.seed.before ? { name: `BEFORE_${md}_0712.jpg`, url: null, time: '7:12 AM' } : null,
         after: t.seed.after ? { name: `AFTER_${md}_1538.jpg`, url: null, time: '3:38 PM' } : null,
@@ -86,17 +91,20 @@ export default class Component extends React.Component {
       tabs[t.id] = 'activity'; showErr[t.id] = false; attErr[t.id] = false; newMember[t.id] = '';
     });
     const saved = JSON.parse(JSON.stringify(forms));
-    this.state = { screen: props.startScreen || 'login', pin: '', pinError: false, user: null, adminTab: 'all', tabs, crews, removed: R.removed || [], att, attAt, actAt, forms, saved, photos, draftAt, showErr, attErr, newMember, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0 };
+    this.state = { screen: this.live ? (sess ? this.liveUser(sess.user).screen : 'login') : (props.startScreen || 'login'), pin: '', pinError: false, user: sess ? this.liveUser(sess.user) : null,
+      online: api.online(), busy: null, loading: false, loginMsg: null, lastLoad: null, loadErr: null, sheetUrl: '', adminTab: 'all', tabs, crews, removed: R.removed || [], att, attAt, actAt, forms, saved, photos, draftAt, showErr, attErr, newMember, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0 };
   }
   componentDidMount() {
     this._flush = () => this.flushDrafts();
     this._vis = () => { if (document.visibilityState === 'hidden') this.flushDrafts(); };
     window.addEventListener('pagehide', this._flush); window.addEventListener('beforeunload', this._flush); document.addEventListener('visibilitychange', this._vis);
     this.setState({ storagePct: this.storagePct() });
+    if (this.live) this.liveMount();
   }
   componentWillUnmount() {
     clearTimeout(this._t); clearTimeout(this._cr); Object.values(this._as || {}).forEach(clearTimeout);
     window.removeEventListener('pagehide', this._flush); window.removeEventListener('beforeunload', this._flush); document.removeEventListener('visibilitychange', this._vis);
+    if (this.live) this.liveUnmount();
     this.flushDrafts();
   }
   flushDrafts() {
@@ -127,7 +135,7 @@ export default class Component extends React.Component {
   fmtDate(iso, wd) { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', wd ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' }); }
   historyFor(t, s) {
     const map = {};
-    t.history.forEach(h => { map[h.date] = { ...h }; });
+    (this.live ? [] : t.history).forEach(h => { map[h.date] = { ...h }; });   // live: history comes from the Sheet
     Object.values(this.arch || {}).forEach(a => { if (a.teamId === t.id && a.date !== s.today) map[a.date] = { date: a.date, location: a.location, details: a.details, status: a.status, att: a.att, photos: a.photos, submittedAt: a.submittedAt }; });
     return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
   }
@@ -148,12 +156,13 @@ export default class Component extends React.Component {
     if (this.state.pinError && this.state.pin.length === 4) return;
     if (k === 'del') return this.setState(s => ({ pin: s.pin.slice(0, -1), pinError: false }));
     const pin = (this.state.pin + k).slice(0, 4);
-    if (pin.length < 4) return this.setState({ pin, pinError: false });
+    if (pin.length < 4) return this.setState({ pin, pinError: false, loginMsg: null });
+    if (this.live) return this.state.busy ? null : this.livePress(pin);   // live: PIN checked by the server
     const user = this.lookup(pin);
     if (user) this.setState({ pin, user, pinError: false });
     else { this.setState({ pin, pinError: true }); setTimeout(() => this.setState({ pin: '', pinError: false }), 900); }
   }
-  logout = () => this.setState({ screen: 'login', user: null, pin: '', pinError: false });
+  logout = () => this.live ? this.liveLogout() : this.setState({ screen: 'login', user: null, pin: '', pinError: false });
 
   photosOk(id, s) {
     const p = s.photos[id]; const needAfter = this.props.afterPhotoAlwaysRequired || s.forms[id].status === 'COMPLETE';
@@ -181,6 +190,7 @@ export default class Component extends React.Component {
 
   submitAct(id) {
     const v = this.validate(id, this.state);
+    if (this.live) return this.state.busy ? null : this.liveSubmitAct(id);   // live
     if (v.list.length) { this.up('showErr', id, () => true); this.toast(v.list.length > 1 ? `${v.list.length} items need attention` : '1 item needs attention', 'err'); setTimeout(() => this.scrollToId('act-errors'), 60); return; }
     const at = this.now();
     this.setState(s => ({ actAt: { ...s.actAt, [id]: at }, showErr: { ...s.showErr, [id]: false }, saved: { ...s.saved, [id]: { ...s.forms[id] } }, draftAt: { ...s.draftAt, [id]: at } }), () => {
@@ -201,6 +211,7 @@ export default class Component extends React.Component {
     else this.toast('Copy not supported on this browser', 'err');
   }
   editAct(id) {
+    if (this.live) return this.state.busy ? null : this.liveEditAct(id);   // live
     this.setState(s => ({ actAt: { ...s.actAt, [id]: null } }), () => {
       const a = { ...this.arch }; delete a[this.state.today + '|' + id]; this.arch = a; this.lsSet('archive', a);
       if (this.persist()) this.toast('Report unlocked — submit again when done', 'info');
@@ -209,13 +220,14 @@ export default class Component extends React.Component {
   submitAtt(id) {
     const s = this.state; const missing = s.crews[id].some(m => { const a = s.att[id][m.name]; return a && !a.present && !a.reason; });
     if (missing) { this.up('attErr', id, () => true); this.toast('Add a reason for absent crew', 'err'); setTimeout(() => this.scrollToId('att-errors'), 60); return; }
+    if (this.live) { this.up('attErr', id, () => false); return this.state.busy ? null : this.liveSubmitAtt(id); }   // live
     this.up('attErr', id, () => false); this.upP('attAt', id, () => this.now(), 'Attendance submitted and saved');
   }
-  thumb(file) {
+  thumb(file, max = 560, quality = 0.7) {
     return new Promise((resolve, reject) => {
       const src = URL.createObjectURL(file), img = new Image();
       img.onload = () => {
-        try { const sc = Math.min(1, 560 / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); resolve(c.toDataURL('image/jpeg', 0.7)); }
+        try { const sc = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); resolve(c.toDataURL('image/jpeg', quality)); }
         catch (e) { reject(e); } finally { URL.revokeObjectURL(src); }
       };
       img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('bad image')); };
@@ -225,6 +237,7 @@ export default class Component extends React.Component {
   async onFile(id, key, e) {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
     if (!/^image\//.test(f.type)) return this.toast('That file is not a photo', 'err');
+    if (this.live) return this.liveOnFile(id, key, f);   // live: upload to Google Drive
     let url; try { url = await this.thumb(f); } catch (err) { return this.toast('Could not read that photo — try again', 'err'); }
     const old = this.state.photos[id][key]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url);
     this.setState(s => ({ photos: { ...s.photos, [id]: { ...s.photos[id], [key]: { name: f.name, url, time: this.now() } } } }), () => {
@@ -237,6 +250,7 @@ export default class Component extends React.Component {
     const name = (this.state.newMember[id] || '').trim();
     if (!name) return this.toast('Type a name first', 'err');
     if (this.state.crews[id].some(m => m.name.toLowerCase() === name.toLowerCase())) return this.toast('Already on this crew', 'err');
+    if (this.live) return this.liveRoster('addMember', { teamId: id, name }, `${name} added`).then(ok => ok && this.up('newMember', id, () => ''));   // live
     this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name, role: 'Crew' }) }, att: { ...s.att, [id]: { ...s.att[id], [name]: { present: true, reason: null } } }, newMember: { ...s.newMember, [id]: '' } }),
       () => { if (this.persist()) this.toast(`${name} added`); });
   }
@@ -244,6 +258,7 @@ export default class Component extends React.Component {
     const key = id + '|' + m.name;
     if (this.state.confirmRemove !== key) { clearTimeout(this._cr); this.setState({ confirmRemove: key }); this._cr = setTimeout(() => this.setState({ confirmRemove: null }), 4000); return; }
     clearTimeout(this._cr);
+    if (this.live) { this.setState({ confirmRemove: null }); return this.liveRoster('archiveMember', { personId: m.id }, `${m.name} removed · archived`); }   // live
     this.setState(s => {
       const a = { ...s.att[id] }, last = a[m.name] || null; delete a[m.name];
       return { confirmRemove: null, crews: { ...s.crews, [id]: s.crews[id].filter(x => x.name !== m.name) }, att: { ...s.att, [id]: a },
@@ -251,12 +266,14 @@ export default class Component extends React.Component {
     }, () => { if (this.persist()) this.toast(`${m.name} removed · archived`, 'info'); });
   }
   restoreMember(id, r) {
+    if (this.live) return this.liveRoster('restoreMember', { personId: r.id }, `${r.name} restored`);   // live
     if (this.state.crews[id].some(m => m.name === r.name)) return this.toast('Already on this crew', 'err');
     this.setState(s => ({ crews: { ...s.crews, [id]: s.crews[id].concat({ name: r.name, role: r.role }) },
       att: { ...s.att, [id]: { ...s.att[id], [r.name]: r.lastAttendance || { present: true, reason: null } } },
       removed: s.removed.filter(x => !(x.teamId === id && x.name === r.name)) }), () => { if (this.persist()) this.toast(`${r.name} restored`); });
   }
   exportCsv() {
+    if (this.live) return this.state.busy ? null : this.liveExport();   // live: CSV built from the Sheet
     const s = this.state, T = Component.T, rows = [];
     const head = ['Date', 'Team', 'Leadman', 'Location', 'Activity Details', 'Status', 'From', 'To', 'Target (KM/Loc)', 'Actual (KM/Loc)', 'Target Manpower', 'Actual Manpower', 'Crew Present', 'Absent (reason)', 'Equipment / Plate', 'Photos', 'Remarks', 'Report State', 'Submitted At'];
     T.forEach(t => {
@@ -307,7 +324,8 @@ export default class Component extends React.Component {
       style: k === '' ? 'visibility:hidden;' : `min-height:60px;background:#F2F4F7;border:1px solid #DDE2E8;border-radius:12px;font-family:Archivo,sans-serif;font-weight:700;color:#0F2540;cursor:pointer;font-size:${k === 'del' ? '14px' : '24px'};`,
     }));
     const dots = [0, 1, 2, 3].map(i => ({ style: `width:18px;height:18px;border-radius:50%;border:2.5px solid ${s.pinError ? '#C62828' : '#0F2540'};background:${s.pin.length > i ? (s.pinError ? '#C62828' : '#0F2540') : 'transparent'};` }));
-    const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && this.setState({ screen: s.user.screen }), reset: () => this.setState({ user: null, pin: '' }) };
+    const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && (this.live ? this.liveProceed() : this.setState({ screen: s.user.screen })), reset: () => { if (this.live) api.clearSession(); this.setState({ user: null, pin: '' }); },
+      message: s.pinError ? null : s.loginMsg, checking: s.busy === 'login', showDemoPins: !this.live };
 
     const statuses = {}; T.forEach(t => { statuses[t.id] = this.teamStatus(t.id, s); });
     const submittedN = T.filter(t => statuses[t.id] === 'submitted').length;
@@ -337,7 +355,7 @@ export default class Component extends React.Component {
         details: done ? f.details : (st === 'missing' ? 'Waiting for attendance and activity report' : 'Activity report not submitted yet'),
         detailsStyle: `padding:12px 14px;font-size:14px;line-height:1.4;${done ? 'color:#33404F;' : 'color:#8A4B00;font-style:italic;'}`,
         hasStatus: done, statusLabel: f.status === 'COMPLETE' ? 'Complete' : 'Ongoing', statusStyle: this.statusChip(f.status),
-        targetActual: done ? `${f.targetLoc} / ${f.actualLoc}` : '—', manpower: s.attAt[id] ? `${c.present} / ${f.targetMH}` : 'No attendance',
+        targetActual: done ? `${f.targetLoc || '—'} / ${f.actualLoc || '—'}${this.live && f.unit ? ' ' + f.unit : ''}` : '—', manpower: s.attAt[id] ? `${c.present} / ${f.targetMH}` : 'No attendance',
         photos: `${photoCount(id)} / 2`, reportLabel: CH[st][0], reportStyle: this.chip(st) };
     };
     let rows;
@@ -368,7 +386,10 @@ export default class Component extends React.Component {
       onExport: () => this.exportCsv(), resetDemo: () => this.resetDemo(), copyCsv: () => this.copyCsv(),
       hasExport: !!s.lastExport,
       exportLine: s.lastExport ? `${s.lastExport.ok ? 'Download requested' : 'Download failed'} · ${s.lastExport.name} · ${s.lastExport.rows} rows · ${s.lastExport.at}` : '',
-      storageLine: `Report storage on this device: ${s.storagePct || 0}% of ~5 MB`,
+      storageLine: this.live ? `Google Sheet · ${s.loading ? 'updating…' : s.lastLoad ? 'last updated ' + s.lastLoad : 'not loaded yet'}${s.loadErr && !s.loading ? ' · ' + s.loadErr : ''}` : `Report storage on this device: ${s.storagePct || 0}% of ~5 MB`,
+      live: this.live, refresh: () => this.refresh(), sheetUrl: s.sheetUrl, hasSheet: !!s.sheetUrl,
+      xlsxUrl: s.lastExport && s.lastExport.xlsxUrl, hasXlsx: !!(s.lastExport && s.lastExport.xlsxUrl),
+      exportLabel: s.busy === 'export' ? 'Exporting…' : 'Export CSV (Excel)',
       storageStyle: `font-size:13px;font-weight:700;${(s.storagePct || 0) >= 70 ? 'color:#A8261B;' : 'color:#33404F;'}`,
     };
 
@@ -394,13 +415,13 @@ export default class Component extends React.Component {
         const p = s.photos[id][k], req = k === 'before' || needAfter, b = err[k], lbl = k === 'before' ? 'Before Work' : 'After Work';
         return { label: k === 'before' ? 'Before Work' : 'After Work', hint: k === 'before' ? 'Take before the crew starts' : 'Take when work is finished',
           empty: !p, filled: !!p, hasUrl: !!(p && p.url), noUrl: !!(p && !p.url), previewStyle: p && p.url ? `position:absolute;inset:0;background:url("${p.url}") center/cover no-repeat;` : '', name: p ? p.name : '', time: p ? p.time : '',
-          reqLabel: p ? 'Uploaded' : (req ? 'Required' : 'Optional'),
-          reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
+          reqLabel: p ? (p.pending ? 'Not uploaded yet' : 'Uploaded') : (req ? 'Required' : 'Optional'),
+          reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${p && p.pending ? 'background:#FDEBD3;color:#8A4B00;' : p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
           dropStyle: `height:196px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:10px;${locked ? 'cursor:not-allowed;opacity:0.55;' : 'cursor:pointer;'}${b ? 'border:2px dashed #C62828;background:#FFF6F5;' : 'border:2px dashed #8795A8;background:#F7F8FA;'}`,
           onFile: e => this.onFile(id, k, e),
           takeAria: locked ? `${lbl} photo, locked` : `Upload ${lbl} photo`, replaceAria: locked ? `Replace ${lbl} photo, locked` : `Replace ${lbl} photo`, removeAria: locked ? `Remove ${lbl} photo, locked` : `Remove ${lbl} photo`,
           replaceStyle: lockBtn(false, locked), removeStyle: lockBtn(true, locked),
-          remove: () => { if (locked) return; const old = s.photos[id][k]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url); this.upP('photos', id, o => ({ ...o, [k]: null }), 'Photo removed', 'info'); } };
+          remove: () => { if (locked) return; if (this.live) return this.liveRemovePhoto(id, k); const old = s.photos[id][k]; if (old && old.url && old.url.indexOf('blob:') === 0) URL.revokeObjectURL(old.url); this.upP('photos', id, o => ({ ...o, [k]: null }), 'Photo removed', 'info'); } };
       });
       const people = s.crews[id].map(m => {
         const a = s.att[id][m.name] || { present: true, reason: null }, absent = !a.present, needR = absent && !a.reason && s.attErr[id];
@@ -430,7 +451,12 @@ export default class Component extends React.Component {
         onActivity: tab === 'activity', onAttendance: tab === 'attendance', onHistory: tab === 'history',
         form: f, set, fs, photoList,
         ongoingStyle: seg(f.status === 'ONGOING', '#B35F00') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''), completeStyle: seg(f.status === 'COMPLETE', '#17693F') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''),
-        isOngoing: f.status === 'ONGOING', isComplete: f.status === 'COMPLETE', chipAria: 'Report status: ' + CH[st][0],
+        isOngoing: f.status === 'ONGOING', isComplete: f.status === 'COMPLETE',
+        isKM: f.unit !== 'Locations', isLoc: f.unit === 'Locations',
+        kmStyle: seg(f.unit !== 'Locations', '#0F2540') + 'min-height:44px;font-size:14px;' + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''), locStyle: seg(f.unit === 'Locations', '#0F2540') + 'min-height:44px;font-size:14px;' + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''),
+        setKM: () => { this.up('forms', id, o => ({ ...o, unit: 'KM' })); this.scheduleAutosave(id); }, setLoc: () => { this.up('forms', id, o => ({ ...o, unit: 'Locations' })); this.scheduleAutosave(id); },
+        submitLabel: s.busy === 'act' ? 'Submitting…' : 'Submit report', editLabel: s.busy === 'edit' ? 'Unlocking…' : 'Edit report',
+        chipAria: 'Report status: ' + CH[st][0],
         useBtnStyle: lockBtn(false, locked) + 'font-size:13px;',
         saveLine: dirty ? '● Unsaved — autosaving…' : s.draftAt[id] ? `✓ Saved on this phone · ${s.draftAt[id]}` : 'Not saved yet',
         saveLineStyle: `font-size:13px;font-weight:700;${dirty ? 'color:#8A4B00;' : 'color:#17693F;'}`,
@@ -444,7 +470,7 @@ export default class Component extends React.Component {
         saveDraft: () => this.saveDraft(id),
         submitAct: () => this.submitAct(id), editAct: () => this.editAct(id),
         attDone: !!s.attAt[id], attOpen: !s.attAt[id], attAt: s.attAt[id], showAttErr: s.attErr[id],
-        attBtn: s.attAt[id] ? 'Update attendance' : `Submit attendance (${c.present}/${c.total})`,
+        attBtn: s.busy === 'att' ? 'Submitting…' : s.attAt[id] ? 'Update attendance' : `Submit attendance (${c.present}/${c.total})`,
         markAll: () => { this.upP('att', id, o => { const n = {}; Object.keys(o).forEach(k => { n[k] = { present: true, reason: null }; }); return n; }); this.toast('Everyone marked present', 'info'); },
         submitAtt: () => this.submitAtt(id), people, history: hist, noToday: !s.actAt[id] };
     }
@@ -452,8 +478,9 @@ export default class Component extends React.Component {
     const tc = { ok: '#17693F', err: '#A8261B', info: '#0F2540' };
     return {
       navItems, todayLong, todayShort, login, kpi, admin, cur, logout: this.logout,
-      showNav: this.props.prototypeNav !== false,
-      tabsBarStyle: `position:sticky;top:${this.props.prototypeNav !== false ? 52 : 0}px;z-index:40;display:flex;background:#FFFFFF;border-bottom:1px solid #DDE2E8;`,
+      showNav: !this.live && this.props.prototypeNav !== false,   // live: prototype screen bar never shows
+      offline: this.live && !s.online,
+      tabsBarStyle: `position:sticky;top:${(!this.live && this.props.prototypeNav !== false ? 52 : 0) + (this.live && !s.online ? 40 : 0)}px;z-index:40;display:flex;background:#FFFFFF;border-bottom:1px solid #DDE2E8;`,
       isLogin: s.screen === 'login', isAdmin: s.screen === 'admin', isTeam: !!t,
       hasToast: !!s.toast, toastMsg: s.toast ? s.toast.msg : '',
       toastStyle: `background:${s.toast ? tc[s.toast.kind] : '#0F2540'};color:#FFFFFF;font-weight:700;font-size:15px;padding:12px 18px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.25);text-align:center;overflow-wrap:anywhere;word-break:break-word;width:max-content;max-width:100%;`,
@@ -462,3 +489,5 @@ export default class Component extends React.Component {
 
   render() { return <View v={this.renderVals()} />; }
 }
+
+Object.assign(Component.prototype, liveMethods);

@@ -7,13 +7,16 @@ const ok = (name, cond, detail) => { if (!cond) failed++; console.log((cond ? 'P
 const img = 'data:image/jpeg;base64,' + Buffer.from('fake-jpeg-bytes').toString('base64');
 
 const B = makeBackend();
-B.env.setup(); B.env.setup();
+B.env.setup({ demoPins: true }); B.env.setup({ demoPins: true });
 const call = B.call;
 const today = B.env.today_(), yesterday = B.env.yesterday_();
 
 // ── Setup ───────────────────────────────────────────────────────────────
 ok('setup creates all tabs', ['Teams', 'Roster', 'Attendance', 'Reports', 'Photos', 'Audit'].every(n => B.sheets[n]));
 ok('setup is safe to re-run (5 team rows, 34 roster rows)', B.sheets.Teams.getLastRow() === 6 && B.sheets.Roster.getLastRow() === 35, B.sheets.Roster.getLastRow());
+const R = require('./fake-gas.cjs').makeBackend(); R.env.setup();
+const rp = R.env.readAll_('Teams').map(t => t.pin);
+ok('real setup makes 5 different random PINs, none of the demo ones', rp.length === 5 && new Set(rp).size === 5 && rp.every(p => /^\d{4}$/.test(p) && !['0000', '1111', '2222', '3333', '4444'].includes(p)), rp.join());
 ok('token secret created', (B.props.TOKEN_SECRET || '').length > 40);
 
 // ── Auth ────────────────────────────────────────────────────────────────

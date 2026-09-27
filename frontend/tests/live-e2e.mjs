@@ -19,7 +19,7 @@ const { makeBackend } = require(path.join(HERE, '..', '..', 'google-apps-script'
 const BACKEND = 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec';
 
 const B = makeBackend();
-B.env.setup();
+B.env.setup({ demoPins: true });
 const SETUP = () => APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + B.props.SETUP_KEY;
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2', '.woff': 'font/woff', '.webmanifest': 'application/manifest+json' };

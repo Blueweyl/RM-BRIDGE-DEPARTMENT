@@ -61,14 +61,14 @@ nothing extra and admin can open, filter and print the data directly in Sheets.
 All cells are stored as plain text, so dates (`2026-09-27`), times and plate numbers stay
 exactly as sent. Times are Manila time, `yyyy-MM-dd HH:mm:ss`.
 
-**Teams** (key: Team ID). The admin edits this tab.
+**Teams** (key: Team ID). The admin edits this tab. `setup()` gives everyone a random PIN; demo PINs 0000–4444 are never used in live mode.
 | Team ID | Team | Short Name | Leadman | PIN (4 digits) | Default Unit | Active (Yes/No) |
 |---|---|---|---|---|---|---|
-| admin | Operations Admin | Admin | | 0000 | | Yes |
-| team1 | Bridge RM_Team 1 | RM Team 1 | Pijay Tanjeco | 1111 | Locations | Yes |
-| team2 | Segment 10 Scupper Drain | Segment 10 | Glenn Butiong | 2222 | KM | Yes |
-| team3 | Bridge Epoxy 1 | Epoxy 1 | Allan Miranda | 3333 | Locations | Yes |
-| team4 | Bridge Epoxy 2 | Epoxy 2 | Gilbert Rivera | 4444 | Locations | Yes |
+| admin | Operations Admin | Admin | | *random* | | Yes |
+| team1 | Bridge RM_Team 1 | RM Team 1 | Pijay Tanjeco | *random* | Locations | Yes |
+| team2 | Segment 10 Scupper Drain | Segment 10 | Glenn Butiong | *random* | KM | Yes |
+| team3 | Bridge Epoxy 1 | Epoxy 1 | Allan Miranda | *random* | Locations | Yes |
+| team4 | Bridge Epoxy 2 | Epoxy 2 | Gilbert Rivera | *random* | Locations | Yes |
 
 **Roster** (key: personId, e.g. `team2-abraham-balmeo`). Seeded with the 34 real crew
 members, including the leadmen.
@@ -179,7 +179,7 @@ The Sheet itself is private to the admin's Google account. Every action checks, 
 4. Hand-off points in the design logic (`App.jsx`, marked `// live`) and small screen additions (`View.jsx`). ✅
 5. Offline: installable app (service worker), bundled fonts, offline banner, photos queued on the phone. ✅
 6. End-to-end test: leadman phone + admin computer against the real backend code. ✅
-7. **Your steps**: create the Sheet, deploy, host the app, change PINs, send setup links (SETUP.md).
+7. **Your steps**: paste the code, run setup, deploy, host the app, send setup links (SETUP.md).
 
 ## 9. Code changes in the app
 
@@ -225,7 +225,7 @@ cd frontend && npm run build && node tests/live-e2e.mjs   # 41 end-to-end checks
 - [ ] Log out → PIN screen.
 
 **Admin (computer and phone)**
-- [ ] PIN 0000 (or the new admin PIN) → command center. Every team's submission appears within 60 s, or immediately with **Refresh**.
+- [ ] Admin PIN (from the Teams tab) → command center. Every team's submission appears within 60 s, or immediately with **Refresh**.
 - [ ] Needs attention lists teams missing attendance or reports.
 - [ ] Team tab → today + history rows, roster. Add a crew member → it appears on that leadman's phone after refresh.
 - [ ] Remove → "Tap to confirm" → archived. Restore works. The leadman cannot be removed.

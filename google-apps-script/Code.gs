@@ -17,6 +17,14 @@
 
 var TZ = 'Asia/Manila';
 var PHOTO_ROOT = 'Bridge NLEX Daily Report Photos';
+// Leave both empty when the script is opened from the Sheet (Extensions → Apps Script).
+// Fill them in for a stand-alone script project: the Sheet's ID and the photo folder's ID.
+var SHEET_ID = '';
+var PHOTO_FOLDER_ID = '';
+
+function db_() {
+  return SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+}
 var SESSION_DAYS = 14;
 var MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 var REASONS = ['Sick', 'Leave', 'No show', 'Other'];
@@ -73,8 +81,14 @@ var SEED = [
 // Setup (run once from the editor)
 // ════════════════════════════════════════════════════════════════════════════
 
-function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+/**
+ * Creates the tabs and fills in the teams and crew (only if empty), with a new random PIN
+ * for the admin and each leadman. The PINs are listed in the Teams tab and in the log.
+ * `options.demoPins` (tests only) keeps the demo PINs 0000–4444.
+ */
+function setup(options) {
+  var demoPins = !!(options && options.demoPins === true);
+  var ss = db_();
   Object.keys(TABLES).forEach(function (name) {
     var sh = ss.getSheetByName(name) || ss.insertSheet(name);
     var cols = TABLES[name];
@@ -85,11 +99,13 @@ function setup() {
   });
   var now = now_();
   if (readAll_('Teams').length === 0) {
-    upsert_('Teams', 'admin', { teamId: 'admin', name: 'Operations Admin', short: 'Admin', leadman: '', pin: '0000', defaultUnit: '', active: 'Yes' });
-    SEED.forEach(function (t) {
-      upsert_('Teams', t[0], { teamId: t[0], name: t[1], short: t[2], leadman: t[3], pin: t[4], defaultUnit: t[5], active: 'Yes' });
+    var pins = demoPins ? ['0000'].concat(SEED.map(function (t) { return t[4]; })) : randomPins_(SEED.length + 1);
+    upsert_('Teams', 'admin', { teamId: 'admin', name: 'Operations Admin', short: 'Admin', leadman: '', pin: pins[0], defaultUnit: '', active: 'Yes' });
+    SEED.forEach(function (t, i) {
+      upsert_('Teams', t[0], { teamId: t[0], name: t[1], short: t[2], leadman: t[3], pin: pins[i + 1], defaultUnit: t[5], active: 'Yes' });
     });
   }
+  readAll_('Teams').forEach(function (t) { Logger.log('PIN ' + t.pin + ' — ' + t.name + (t.leadman ? ' (' + t.leadman + ')' : '')); });
   if (readAll_('Roster').length === 0) {
     SEED.forEach(function (t) {
       [[t[3], 'Leadman']].concat(t[6]).forEach(function (m) {
@@ -110,7 +126,7 @@ function setup() {
   photoRoot_();
   Logger.log('Setup complete. Now: Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone).');
   Logger.log('Setup key (goes in the setup link, keep it private): ' + props.getProperty('SETUP_KEY'));
-  Logger.log('IMPORTANT: change the demo PINs in the Teams tab before real use.');
+  Logger.log('Give each leadman only their own PIN. You can change any PIN in the Teams tab.');
 }
 
 /** Print the setup link to send to phones. Run from the editor after deploying; paste your app address below. */
@@ -125,6 +141,16 @@ function showSetupLink() {
 function newSetupKey() {
   PropertiesService.getScriptProperties().setProperty('SETUP_KEY', Utilities.getUuid().replace(/-/g, '').slice(0, 16));
   showSetupLink();
+}
+
+/** n different 4-digit PINs, avoiding obvious ones like 0000, 1111 or 1234. */
+function randomPins_(n) {
+  var out = [], weak = /^(\d)\1{3}$|^(0123|1234|2345|3456|4567|5678|6789|9876|4321)$/;
+  while (out.length < n) {
+    var p = ('000' + Math.floor(Math.random() * 10000)).slice(-4);
+    if (!weak.test(p) && out.indexOf(p) < 0) out.push(p);
+  }
+  return out;
 }
 
 /** Sign everyone out (e.g. a phone was lost). Run from the editor. */
@@ -275,7 +301,7 @@ function load_(s, req) {
     attendance: readAll_('Attendance').filter(function (a) { return a.reportDate >= since && mine(a); }),
     reports: reports,
     photos: photos,
-    sheetUrl: isAdmin_(s) ? SpreadsheetApp.getActiveSpreadsheet().getUrl() : '',
+    sheetUrl: isAdmin_(s) ? db_().getUrl() : '',
   };
 }
 
@@ -519,7 +545,7 @@ function exportCsv_(s, req) {
   };
   var csv = [head].concat(rows).map(function (r) { return r.map(esc).join(','); }).join('\r\n');
   audit_(s.user, '', '', 'export', from + ' to ' + to + ' · ' + rows.length + ' rows');
-  var id = SpreadsheetApp.getActiveSpreadsheet().getId();
+  var id = db_().getId();
   return { ok: true, csv: csv, rows: rows.length, filename: 'NLEX_Daily_Report_' + from + '_to_' + to + '.csv',
     xlsxUrl: 'https://docs.google.com/spreadsheets/d/' + id + '/export?format=xlsx' };
 }
@@ -547,7 +573,7 @@ function col_(name, field) {
 }
 
 function sheet_(name) {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  var sh = db_().getSheetByName(name);
   if (!sh) throw new Error('Tab "' + name + '" is missing — run setup() in the Apps Script editor.');
   return sh;
 }
@@ -650,7 +676,7 @@ function newPersonId_(teamId, name) {
 
 function photoRoot_() {
   var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty('PHOTO_FOLDER_ID');
+  var id = props.getProperty('PHOTO_FOLDER_ID') || PHOTO_FOLDER_ID;
   if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
   var it = DriveApp.getFoldersByName(PHOTO_ROOT);
   var folder = it.hasNext() ? it.next() : DriveApp.createFolder(PHOTO_ROOT);

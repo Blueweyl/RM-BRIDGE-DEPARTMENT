@@ -1,0 +1,7 @@
+body { margin:0; background:#E9ECF1; font-family:'Source Sans 3',sans-serif; color:#0F2540; -webkit-tap-highlight-color:transparent; }
+* { box-sizing:border-box; }
+input, select, textarea, button { font-family:'Source Sans 3',sans-serif; }
+input:focus, textarea:focus, select:focus { outline:3px solid #F2A65A; outline-offset:0; border-color:#E8760F; }
+fieldset[disabled] input, fieldset[disabled] textarea { background:#EEF1F4 !important; color:#33404F; border-color:#DDE2E8 !important; cursor:not-allowed; }
+html { scroll-padding-top:120px; scroll-padding-bottom:120px; }
+a { color:#0F2540; } a:hover { color:#E8760F; }

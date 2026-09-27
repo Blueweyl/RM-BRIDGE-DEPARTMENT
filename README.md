@@ -1,6 +1,9 @@
 # RM Bridge Department — Bridge NLEX Daily Report
 
-Daily field-ops reporting app for the Savvice NLEX bridge / road maintenance crews. Leadmen use it on their phones for attendance,
+Daily field-ops reporting app for the Savvice NLEX bridge / road maintenance crews.
+
+**Live app:** https://bridge-nlex-report.netlify.app (Netlify site `bridge-nlex-report`). Phones connect to the
+Google backend through the admin's setup link, see [`google-apps-script/SETUP.md`](google-apps-script/SETUP.md). Leadmen use it on their phones for attendance,
 activity reports and before/after photos. Admin uses it on desktop for the
 command view, crew roster and CSV export.
 

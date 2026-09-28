@@ -73,15 +73,16 @@ is stored with a leading `'` so Sheets never runs it as a formula.
 | **DailyReports** | `teamId\|date` | server-made **reportId**, state (draft/submitted), all form fields, crew present, photo IDs + `=IMAGE` previews, **version** (submissions), **rev** (every change), firstSubmittedAt, late, reopen reason, last request ID |
 | **Photos** | photoId | reportId, client photo ID, team, leadman, type, status (Active/Replaced/Removed), location + capture time (phone), upload time, Drive file, bytes |
 | **Revisions** | revisionId | JSON snapshot of the report and its attendance each time it is submitted, reopened, or its attendance changes |
-| **AuditLog** | (append-only) | who, role, team, action, entity + ID, before, after, reason, request ID, device, **chain hash** |
+| **AuditLog** | (append-only) | who (name, role, user ID), team, action, entity + ID, report revision, before, after, reason, request ID, device, server time, **chain hash** |
 | **Sessions** | sessionId | user, role, team, device, created, expires, revoked |
+| **Requests** | user \| action \| requestId | idempotency ledger: every accepted write's request ID, a hash of its data and the answer. A retry gets the same answer; the same ID with different data is refused |
 
 - **draft**: attendance is in, but the report is not submitted yet (or it was reopened).
 - **submitted**: accepted by the server. The phone locks the fields, attendance and photos.
 - **locked**: a leadman can change today's and yesterday's report only; admin any past day.
 - Nothing is deleted: replaced photos stay (status Replaced), a reopened report keeps a
   snapshot of the submitted version, archived crew keep their attendance.
-- `Users`, `AuditLog`, `Revisions` and `Sessions` are protected (warning on hand edits).
+- `Users`, `AuditLog`, `Revisions`, `Sessions` and `Requests` are protected (warning on hand edits).
   `verifyAuditLog()` recomputes the hash chain and reports the first row edited by hand.
 
 ## 3. Photo storage (Google Drive)
@@ -150,9 +151,11 @@ written, the admin screen says so (count, time, error) until `clearAuditFailures
 - **PIN** (4 digits) → checked against an HMAC hash in the Users tab. To change a PIN, type
   4 new digits into the cell; it is hashed at the next sign-in. The server creates a
   **Sessions** row and returns a signed token (HMAC-SHA256, secret in Script Properties):
-  14 days for leadmen (they work offline), 12 hours for admin.
+  72 hours for leadmen, 8 hours for admin. Work queued offline stays on the phone and is sent after
+  the next sign-in, so a short session never loses data.
 - Every request checks: signature → not expired → session row exists and is not revoked →
-  user active → PIN unchanged since sign-in → team active.
+  user active → PIN unchanged since sign-in → team active → **the request carries the device key
+  of the phone that signed in** (a token copied to another phone or tool is refused and audited).
 - **Brute-force protection**: 5 wrong PINs lock that phone for 15 min; 20 wrong PINs across
   all phones in 15 min pause sign-in for everyone (logged in the audit log; `clearLoginLock()`
   lifts it). Wrong setup keys are rate-limited separately and cannot lock PIN sign-in.
@@ -232,6 +235,10 @@ The server trusts nothing the phone says about identity, team, role, state, tota
   counts as *not confirmed*: the record stays Pending sync and the screen says so.
 - Queued records and photos belong to the person who took/queued them: they are only ever
   sent with that person's sign-in (never with someone else's, e.g. the admin on the same phone).
+  If someone else signs in, a red banner names whose unsent work is on the phone; it is not sent,
+  not reported to the server under the new user, and cannot be replaced by the new user's submit.
+- A photo's copy on the phone is deleted only after it was uploaded **and** a report using it was
+  confirmed by the server (not right after the upload).
 - A photo the server refuses (not a real image, day locked…) is marked **Refused — retake** and not
   retried; the report cannot be confirmed without its required photos.
 - An expired or revoked session sends the phone back to the PIN screen; queued work is kept and
@@ -240,16 +247,18 @@ The server trusts nothing the phone says about identity, team, role, state, tota
   "On the phone: …" in **Needs attention** and **On phone, not synced** in the report overview.
 - Dates and times shown are **Manila time** from the server clock, whatever the phone's time zone
   or clock says. Audit times are always the server's.
-- Saved data that is damaged or hand-edited is checked before use: the app still opens, says so,
-  and loads the server copy. A crash shows a Reload screen instead of a blank page.
+- Saved data that is damaged or hand-edited is checked before use: a copy is kept under
+  `bnlex.quarantine` (last 5) for recovery, the damaged part is set aside (never turned into an
+  empty draft that could be sent over the server's data), the server copy is loaded, and the app
+  says so. A crash shows a Reload screen instead of a blank page.
 - The first sign-in needs signal. After that the app opens offline and stays signed in.
 
 ## 10. Testing checklist
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 151 backend checks, incl. adversarial cases
-cd frontend && npm run test:e2e                     # 95 end-to-end checks: phones + admin in real browsers
+node google-apps-script/test/backend.test.cjs      # 161 backend checks, incl. adversarial cases
+cd frontend && npm run test:e2e                     # 109 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake
 tokens, duplicate submit, double tap, offline → reconnect, failed photo upload, edited

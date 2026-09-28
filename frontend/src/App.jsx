@@ -6,14 +6,15 @@ import React from 'react';
 import View from './View.jsx';
 import * as api from './api.js';
 import { liveMethods, teamsFrom } from './live.js';
-import { DEMO_TEAMS, DEMO_ADMIN_PIN } from './demo.js';
+import { DEMO_TEAMS, demoSignIn, DemoPins } from './demo.jsx';
 
-// The demo (fixed PINs, sample crews and reports) exists only in demo builds: `npm run dev`,
-// `npm run build:demo` and the standalone HTML. In `npm run build` (production) __DEMO__ is the
-// constant false, so demo.js is left out of the bundle entirely (see vite.config.js).
+// The demo (its PINs, sample crews and reports) lives only in demo.jsx and exists only in demo builds:
+// `npm run dev`, `npm run build:demo` and the standalone HTML. In `npm run build` (production)
+// __DEMO__ is the constant false, so demo.jsx is left out of the bundle entirely (see vite.config.js).
+// In live mode every PIN is checked by the server; this file holds no PINs.
 /* global __DEMO__ */
 const DEMO_BUILD = __DEMO__;
-const DEMO = DEMO_BUILD ? { teams: DEMO_TEAMS, adminPin: DEMO_ADMIN_PIN } : { teams: [], adminPin: null };
+const DEMO = DEMO_BUILD ? { teams: DEMO_TEAMS, signIn: demoSignIn, Pins: DemoPins } : { teams: [], signIn: () => null, Pins: null };
 
 // Attendance is { status, note } per person; no entry means "not verified yet".
 const OLD_REASON = { 'No show': 'Absent', Sick: 'Sick', Leave: 'Leave', Other: 'Other' };
@@ -32,14 +33,16 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const obj = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const str = v => (typeof v === 'string' ? v : null);
 const FORM_KEYS = ['from', 'to', 'location', 'details', 'targetLoc', 'actualLoc', 'plate', 'targetMH', 'actualMH', 'remarks'];
+/** A saved form, or null when any part of it is damaged (then the whole local draft is set aside). */
 function cleanForm(f, base) {
-  const out = { ...base };
-  if (!f || typeof f !== 'object') return out;
-  FORM_KEYS.forEach(k => { if (typeof f[k] === 'string') out[k] = f[k]; else if (typeof f[k] === 'number') out[k] = String(f[k]); });
-  if (f.status === 'COMPLETE' || f.status === 'ONGOING') out.status = f.status;
-  if (f.unit === 'KM' || f.unit === 'Locations') out.unit = f.unit;
-  return out;
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return null;
+  if (FORM_KEYS.some(k => k in f && typeof f[k] !== 'string')) return null;
+  if ('status' in f && f.status !== 'COMPLETE' && f.status !== 'ONGOING') return null;
+  if ('unit' in f && f.unit !== 'KM' && f.unit !== 'Locations') return null;
+  return { ...base, ...f };
 }
+const validAtt = a => a === null || (a && typeof a === 'object' && !Array.isArray(a) && (typeof a.status === 'string' || typeof a.present === 'boolean'));
+const validPhoto = p => p === null || p === undefined || (p && typeof p === 'object' && typeof p.name === 'string');
 const cleanCrew = v => (Array.isArray(v) ? v.filter(m => m && typeof m.name === 'string' && m.name).map(m => ({ name: m.name, role: str(m.role) || 'Crew', ...(str(m.id) ? { id: m.id } : {}) })) : null);
 const cleanPhoto = p => (p && typeof p === 'object' && typeof p.name === 'string' ? { ...p, url: str(p.url), time: str(p.time) || '' } : null);
 
@@ -60,7 +63,18 @@ export default class Component extends React.Component {
 
   static K = 'bnlex.v3.';
   dayKey() { return api.manilaDay(); }
-  lsGet(k) { try { const v = localStorage.getItem(Component.K + k); return v ? JSON.parse(v) : null; } catch (e) { this.damaged = true; return null; } }
+  lsGet(k) {
+    let v = null;
+    try { v = localStorage.getItem(Component.K + k); } catch (e) { return null; }
+    if (!v) return null;
+    try { return JSON.parse(v); } catch (e) { this.damaged = true; api.quarantine(Component.K + k, v); return null; }
+  }
+  /** Keep a copy of today's saved data before a damaged part of it is set aside (once). */
+  quarantineDay(today) {
+    if (this._qDay) return;
+    this._qDay = true; this.damaged = true;
+    try { api.quarantine(Component.K + 'day.' + today, localStorage.getItem(Component.K + 'day.' + today)); } catch (e) {}
+  }
   lsSet(k, v) { try { localStorage.setItem(Component.K + k, JSON.stringify(v)); return true; } catch (e) { return false; } }
 
   constructor(props) {
@@ -73,7 +87,10 @@ export default class Component extends React.Component {
     const cached = this.live ? teamsFrom(api.loadLocal('teams')) : [];
     const own = sess && sess.user.role === 'leadman' && sess.user.teamId ? teamsFrom([{ teamId: sess.user.teamId, name: sess.user.team, short: sess.user.short, leadman: sess.user.name }]) : [];
     Component.T = this.live ? (cached.length ? cached : own) : this.demo ? DEMO.teams : [];
-    const R = obj(this.lsGet('roster')), D = obj(this.lsGet('day.' + today));
+    const rawD = this.lsGet('day.' + today);
+    if (rawD != null && (typeof rawD !== 'object' || Array.isArray(rawD))) this.quarantineDay(today);
+    const R = obj(this.lsGet('roster')), D = obj(rawD);
+    this.today0 = today;
     this.arch = obj(this.lsGet('archive'));
     const meta = this.lsGet('meta'); if (!meta) this.lsSet('meta', { firstDay: today });
     this.demoDay = this.demo && (!meta || meta.firstDay === today);
@@ -85,7 +102,7 @@ export default class Component extends React.Component {
     this.state = { screen: this.live ? (sess ? this.liveUser(sess.user).screen : 'login') : (props.startScreen || 'login'), pin: '', pinError: false, user: sess ? this.liveUser(sess.user) : null,
       online: api.online(), busy: null, loading: false, loginMsg: null, lastLoad: null, loadErr: null, sheetUrl: '', adminTab: 'all', ...slices, removed, saved, confirmRemove: null, toast: null, today, lastExport: null, storagePct: 0,
       rev: {}, adminRange: { from: this.shift(today, -30), to: today }, adminView: null, adminData: {},
-      outbox: this.live ? this.loadOutbox() : {}, phoneQueue: {}, auditFailures: null };
+      outbox: this.live ? this.loadOutbox() : {}, phoneQueue: {}, auditFailures: null, foreignPhotos: { count: 0, names: [] } };
     // Last server revision seen per team (kept with the day so an offline restart still detects conflicts).
     Object.keys(obj(D.rev)).forEach(k => { if (typeof D.rev[k] === 'string') this.state.rev[k] = D.rev[k]; });
   }
@@ -101,23 +118,31 @@ export default class Component extends React.Component {
     const a = {};
     // A new day starts with everyone NOT verified; the leadman marks each person explicitly.
     o.crews[t.id].forEach(m => { const r = demoDay ? t.absent[m.name] : null; a[m.name] = demoDay ? { status: r ? (OLD_REASON[r] || r) : 'Present', note: '' } : null; });
-    const savedAtt = has(D.att, t.id) ? obj(D.att[t.id]) : {};
-    Object.keys(savedAtt).forEach(n => { if (n in a) a[n] = normAtt(savedAtt[n]); });
-    o.attDirty[t.id] = !!(D.attDirty && D.attDirty[t.id] === true);
+    // Damaged parts of the saved day are set aside (a copy is kept) and the server copy is used instead:
+    // corruption never becomes an empty local draft that could be sent over the server's data.
+    const rawAtt = has(D.att, t.id) ? D.att[t.id] : {};
+    const attBad = !rawAtt || typeof rawAtt !== 'object' || Array.isArray(rawAtt) || Object.values(rawAtt).some(x => !validAtt(x));
+    if (attBad) this.quarantineDay(this.today0);
+    else Object.keys(rawAtt).forEach(n => { if (n in a) a[n] = normAtt(rawAtt[n]); });
+    o.attDirty[t.id] = !attBad && !!(D.attDirty && D.attDirty[t.id] === true);
     o.att[t.id] = a;
     const lf = obj(last && last.forms && last.forms[t.id]);
     const blank = { from: str(lf.from) || tf.from, to: str(lf.to) || tf.to, location: '', details: '', status: 'ONGOING', targetLoc: '', actualLoc: '', plate: str(lf.plate) || tf.plate || '', targetMH: str(lf.targetMH) || tf.targetMH || '', actualMH: '', remarks: '' };
     const base = { unit: lf.unit === 'KM' || lf.unit === 'Locations' ? lf.unit : t.unit, ...(demoDay ? t.form : blank) };
-    o.forms[t.id] = has(D.forms, t.id) ? cleanForm(D.forms[t.id], base) : base;
+    const saved = has(D.forms, t.id) ? cleanForm(D.forms[t.id], base) : base;
+    const formBad = !saved;
+    if (formBad) this.quarantineDay(this.today0);
+    o.forms[t.id] = saved || base;
     o.attAt[t.id] = has(D.attAt, t.id) ? str(D.attAt[t.id]) : (demoDay ? t.seed.att : null);
     o.actAt[t.id] = has(D.actAt, t.id) ? str(D.actAt[t.id]) : (demoDay ? t.seed.act : null);
     const md = this.stamp();
-    const ph = has(D.photos, t.id) ? obj(D.photos[t.id]) : null;
+    let ph = has(D.photos, t.id) ? D.photos[t.id] : null;
+    if (ph && (typeof ph !== 'object' || !validPhoto(ph.before) || !validPhoto(ph.after))) { this.quarantineDay(this.today0); ph = { before: null, after: null }; }   // photos still waiting stay in IndexedDB and upload for their day
     o.photos[t.id] = ph ? { before: cleanPhoto(ph.before), after: cleanPhoto(ph.after) } : !demoDay ? { before: null, after: null } : {
       before: t.seed.before ? { name: `BEFORE_${md}_0712.jpg`, url: null, time: '7:12 AM' } : null,
       after: t.seed.after ? { name: `AFTER_${md}_1538.jpg`, url: null, time: '3:38 PM' } : null,
     };
-    o.draftAt[t.id] = has(D.draftAt, t.id) ? str(D.draftAt[t.id]) : null;
+    o.draftAt[t.id] = !formBad && has(D.draftAt, t.id) ? str(D.draftAt[t.id]) : null;
     o.tabs[t.id] = 'activity'; o.showErr[t.id] = false; o.attErr[t.id] = false; o.newMember[t.id] = '';
     return o;
   }
@@ -128,7 +153,7 @@ export default class Component extends React.Component {
     window.addEventListener('pagehide', this._flush); window.addEventListener('beforeunload', this._flush); document.addEventListener('visibilitychange', this._vis);
     this.setState({ storagePct: this.storagePct() });
     this.checkQuota();
-    if (this.damaged) this.toast('Some data saved on this phone was damaged and could not be read — check today\'s entries.', 'err');
+    if (this.damaged || api.quarantined.length) this.toast('Some data saved on this phone was damaged. A copy was kept for recovery and the server copy is shown — check today\'s entries.', 'err');
     else if (!this.live && !this.demo) this.setState({ loginMsg: 'This phone is not connected yet. Open the setup link from your admin.' });
     if (this.live) this.liveMount();
   }
@@ -194,9 +219,10 @@ export default class Component extends React.Component {
   up(key, id, fn) { this.setState(s => ({ [key]: { ...s[key], [id]: fn(s[key][id]) } })); }
 
   lookup(pin) {
-    if (!this.demo) return null;
-    if (pin === DEMO.adminPin) return { name: 'Operations Admin', initials: 'OA', role: 'Admin', team: 'All teams · NLEX', screen: 'admin', cta: 'Open command center' };
-    const t = Component.T.find(x => x.pin === pin);
+    const who = this.demo ? DEMO.signIn(pin) : null;
+    if (!who) return null;
+    if (who === 'admin') return { name: 'Operations Admin', initials: 'OA', role: 'Admin', team: 'All teams · NLEX', screen: 'admin', cta: 'Open command center' };
+    const t = Component.T.find(x => x.id === who);
     return t ? { name: t.leadman, initials: this.initials(t.leadman), role: 'Leadman', team: t.name, screen: t.id, cta: "Start today's report" } : null;
   }
   initials(n) { return n.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
@@ -449,7 +475,7 @@ export default class Component extends React.Component {
     }));
     const dots = [0, 1, 2, 3].map(i => ({ style: `width:18px;height:18px;border-radius:50%;border:2.5px solid ${s.pinError ? '#C62828' : '#0F2540'};background:${s.pin.length > i ? (s.pinError ? '#C62828' : '#0F2540') : 'transparent'};` }));
     const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && (this.live ? this.liveProceed() : this.setState({ screen: s.user.screen })), reset: () => { if (this.live) api.clearSession(); this.setState({ user: null, pin: '' }); },
-      message: s.pinError ? null : s.loginMsg, checking: s.busy === 'login', showDemoPins: this.demo };
+      message: s.pinError ? null : s.loginMsg, checking: s.busy === 'login', demoPins: this.demo && DEMO.Pins ? React.createElement(DEMO.Pins) : null };
 
     const statuses = {}; T.forEach(t => { statuses[t.id] = this.teamStatus(t.id, s); });
     const submittedN = T.filter(t => statuses[t.id] === 'submitted').length;
@@ -658,6 +684,7 @@ export default class Component extends React.Component {
       navItems, todayLong, todayShort, login, kpi, admin, cur, logout: this.logout,
       showNav: !this.live && this.props.prototypeNav !== false,   // live: prototype screen bar never shows
       offline: this.live && !s.online,
+      foreignWarn: this.live ? this.foreignWarning(s) : '',
       tabsBarStyle: `position:sticky;top:${(!this.live && this.props.prototypeNav !== false ? 52 : 0) + (this.live && !s.online ? 40 : 0)}px;z-index:40;display:flex;background:#FFFFFF;border-bottom:1px solid #DDE2E8;`,
       isLogin: s.screen === 'login', isAdmin: s.screen === 'admin', isTeam: !!t,
       hasToast: !!s.toast, toastMsg: s.toast ? s.toast.msg : '',

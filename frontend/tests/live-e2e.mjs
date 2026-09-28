@@ -92,12 +92,17 @@ async function signIn(pinCode, name, tz) {
   return D;
 }
 
+const until = async (f, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await f()) return true; await new Promise(r => setTimeout(r, 200)); } return false; };
 const attUpd = () => B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
 const manilaLong = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }); };
 
 try {
   // ── Production build: no demo PINs or demo data; no backend = no demo login ──
   const bundle = fs.readdirSync(path.join(DIST, 'assets')).filter(f => f.endsWith('.js')).map(f => fs.readFileSync(path.join(DIST, 'assets', f), 'utf8')).join('');
+  const SRC = path.join(HERE, '..', 'src');
+  const prodSrc = ['App.jsx', 'View.jsx', 'live.js', 'api.js', 'main.jsx', 'idb.js', 'css.js'].map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n')
+    + fs.readFileSync(path.join(HERE, '..', '..', 'google-apps-script', 'Code.gs'), 'utf8');
+  ok('production source has no demo PINs, team.pin, admin PIN constant or Demo PIN box', !/\b(0000|1111|2222|3333|4444)\b|\b[tx]\.pin\b|ADMIN_PIN|adminPin|Demo PINs/.test(prodSrc));
   ok('production bundle contains no demo PINs, crew names or sample reports', !/Pijay|Crisostomo|SAPANG BAGO|NFJ 6654|Demo PINs/.test(bundle) && !/['"](1111|2222|3333|4444)['"]/.test(bundle));
   const N = await device({ width: 390, height: 844 });
   await N.page.goto(APP);
@@ -161,7 +166,6 @@ try {
   await L2.page.click('button[aria-label="Mark Abraham Balmeo present"]');
   L2.page.onDialog = d => d.accept('Abraham came back from leave');
   await click(L2.page, 'Update attendance');
-  const attUpd = () => B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
   ok('[11] other phone updates attendance; the change needs a reason, kept in the audit log', await waitText(L2.page, 'Attendance submitted and saved') && report().crewPresent === '8/9'
     && /Abraham came back/.test(attUpd().reason) && JSON.parse(attUpd().before)['Abraham Balmeo'].status === 'Leave' && JSON.parse(attUpd().after)['Abraham Balmeo'].status === 'Present');
   await L.page.click('button[aria-label="Mark Ian Enriquez not present"]');
@@ -198,7 +202,7 @@ try {
   ok('[7] failed upload shown, photo kept in IndexedDB (not localStorage)', await waitText(L.page, 'Upload failed') && await idbCount(L.page) === 1 && !(await ls(L.page, 'bnlex.v3.day.' + today) || '').includes('data:image'));
   await L.page.evaluate(() => window.dispatchEvent(new Event('online')));
   ok('[7] retry uploads it (one photo on the server)', await waitText(L.page, 'Before photo uploaded') && B.env.readAll_('Photos').filter(p => p.teamId === 'team2' && p.type === 'before').length === 1);
-  ok('[7] uploaded photo removed from IndexedDB', await idbCount(L.page) === 0);
+  ok('[7] uploaded photo still kept on the phone (until its report is confirmed)', await idbCount(L.page) === 1);
   const up = B.env.readAll_('Photos').find(p => p.teamId === 'team2');
   ok('photo metadata stored (report ID, leadman, capture time, location)', up.reportId === report().reportId && up.leadman === 'Glenn Butiong' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(up.capturedAt) && up.location.startsWith('Km.11'), JSON.stringify(up));
 
@@ -218,6 +222,7 @@ try {
   await L.ctx.setOffline(false);
   await L.page.evaluate(() => window.dispatchEvent(new Event('online')));
   ok('[6] back online: sent automatically and confirmed by the server', await waitText(L.page, 'Report submitted at', 15000) && report().state === 'submitted' && report().submittedBy === 'Glenn Butiong');
+  ok('[7] local photo copies deleted only after the report was confirmed by the server', await until(async () => await idbCount(L.page) === 0));
   ok('[6] "confirmed by server" shown only after the server answered; queue emptied', (await text(L.page)).includes('confirmed by server') && !(await ls(L.page, 'bnlex.live.outbox') || '').includes('act|team2'));
   ok('fields locked after submit', await L.page.locator('fieldset').evaluate(f => f.disabled));
   ok('unit and plate stored', report().unit === 'KM' && report().plateNumber === 'NKU 8624', JSON.stringify(report()));
@@ -249,9 +254,9 @@ try {
   await L.page.evaluate(() => { const k = 'bnlex.live.session'; const s = JSON.parse(localStorage.getItem(k)); s.user = { ...s.user, role: 'admin', teamId: 'team1', team: 'All teams' }; localStorage.setItem(k, JSON.stringify(s)); });
   await L.page.reload();
   ok('[8] edited session in localStorage: server puts the leadman back on their own team', await waitText(L.page, 'Leadman · Segment 10 Scupper Drain', 10000));
-  const forged = await L.page.evaluate(async url => { const s = JSON.parse(localStorage.getItem('bnlex.live.session')); const r = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'exportCsv', token: s.token }) }); return r.json(); }, BACKEND);
+  const forged = await L.page.evaluate(async url => { const s = JSON.parse(localStorage.getItem('bnlex.live.session')); const r = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'exportCsv', token: s.token, deviceKey: JSON.parse(localStorage.getItem('bnlex.live.deviceKey')) }) }); return r.json(); }, BACKEND);
   ok('[8][2] leadman token cannot export even with edited local role', !forged.ok && /Admin only/.test(forged.error));
-  const forgedTeam = await L.page.evaluate(async url => { const s = JSON.parse(localStorage.getItem('bnlex.live.session')); const r = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'reopenReport', token: s.token, teamId: 'team1', reportDate: new Date().toISOString().slice(0, 10), reason: 'forged', baseRev: '0' }) }); return r.json(); }, BACKEND);
+  const forgedTeam = await L.page.evaluate(async url => { const s = JSON.parse(localStorage.getItem('bnlex.live.session')); const r = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'reopenReport', token: s.token, deviceKey: JSON.parse(localStorage.getItem('bnlex.live.deviceKey')), requestId: crypto.randomUUID(), teamId: 'team1', reportDate: new Date().toISOString().slice(0, 10), reason: 'forged', baseRev: '0' }) }); return r.json(); }, BACKEND);
   ok('[1][13] forged teamId from the phone refused', !forgedTeam.ok && forgedTeam.denied);
 
   // ── [14] Epoxy 1 phone: the answer to Submit is lost, then the phone reloads ─
@@ -312,6 +317,8 @@ try {
   const rowText = await A.page.evaluate(() => [...document.querySelectorAll('div')].filter(d => d.style.gridTemplateColumns && d.style.gridTemplateColumns.startsWith('200px') && d.innerText.includes('Segment 10 Scupper Drain')).map(d => d.innerText).pop() || '');
   ok('row shows Submitted + photos 2/2 + manpower 8/8', /Submitted/.test(rowText) && /2 \/ 2/.test(rowText) && /8 \/ 8/.test(rowText), rowText.replace(/\n/g, ' | '));
   ok('other teams show Missing Attendance', (await text(A.page)).includes('Missing Attendance'));
+  const stolen = await A.page.evaluate(async ([url, t]) => (await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'load', token: t, deviceKey: JSON.parse(localStorage.getItem('bnlex.live.deviceKey')) }) })).json(), [BACKEND, JSON.parse(await ls(L.page, 'bnlex.live.session')).token]);
+  ok('[3] stolen session: a leadman\'s token copied to another phone is refused', stolen.auth === true);
   ok('admin "Needs attention" shows work stuck on a phone', (await text(A.page)).includes('On the phone: Attendance refused by server'));
   ok('Open Google Sheet link', await A.page.locator('a:has-text("Open Google Sheet")').count() === 1);
 
@@ -366,8 +373,11 @@ try {
   await click(G4.page, 'Submit report');
   ok('failed required photo blocks confirmation: "Not accepted", nothing submitted', await waitText(G4.page, 'Report: Not accepted by the server', 15000) && (await text(G4.page)).includes('Add a Before Work photo') && report('team4').state !== 'submitted');
   await G4.page.click('button[aria-label="Remove Before Work photo"]');
+  faults.uploadPhoto = 'drop';
   await photoFile(G4.page, 'Upload Before Work photo', 'IMG_4002.jpg');
-  await waitText(G4.page, 'Before photo uploaded');
+  ok('duplicate upload: server saved the photo but the answer was lost → phone shows it as not uploaded', await waitText(G4.page, 'Upload failed') && B.env.readAll_('Photos').filter(p => p.teamId === 'team4').length === 1);
+  await G4.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('…the retry gets the same photo back: still ONE photo on the server', await waitText(G4.page, 'Before photo uploaded', 10000) && B.env.readAll_('Photos').filter(p => p.teamId === 'team4').length === 1);
   calls.submitReport = 0;
   faults.submitReport = 'hang';
   await click(G4.page, 'Submit report');
@@ -389,6 +399,45 @@ try {
   await click(Z.page, 'Mark rest present');
   await click(Z.page, 'Submit attendance (8/8)');
   ok('…and records are dated by the server (Manila), not the phone', await waitText(Z.page, 'Attendance submitted at') && report('team1').attendanceSubmittedAt.startsWith(today));
+
+  // ── Refresh during sync: the phone reloads while its request is on the way ──
+  const updates1 = () => B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated' && a.teamId === 'team1').length;
+  const u0 = updates1();
+  await Z.page.click('button[aria-label="Mark Joven Blanza not present"]');
+  await Z.page.locator('[aria-label="Reason for Joven Blanza"]').getByRole('button', { name: 'Sick', exact: true }).click();
+  Z.page.onDialog = d => d.accept('Joven felt sick');
+  faults.saveAttendance = 'slow';
+  await click(Z.page, 'Update attendance');
+  await Z.page.waitForTimeout(100);
+  await Z.page.reload();
+  await Z.page.getByRole('tab', { name: /Attendance/ }).click();
+  ok('refresh during sync: after reload the phone shows it confirmed', await until(async () => (await text(Z.page)).includes('Attendance submitted at') && !(await text(Z.page)).includes('Pending sync') && !(await text(Z.page)).includes('Syncing'), 15000));
+  await Z.page.waitForTimeout(1500);
+  ok('…and the server applied it exactly once', updates1() === u0 + 1 && B.env.readAll_('Attendance').find(a => a.name === 'Joven Blanza').status === 'Sick' && !(await ls(Z.page, 'bnlex.live.outbox') || '').includes('att|team1'), updates1() - u0);
+
+  // ── Account switch with a pending queue ─────────────────────────────────
+  await Z.ctx.setOffline(true);
+  await Z.page.click('button[aria-label="Mark Joven Blanza present"]');
+  Z.page.onDialog = d => d.accept('Joven is back');
+  await click(Z.page, 'Update attendance');
+  ok('leadman queues a change offline', await waitText(Z.page, 'Attendance: Pending sync'));
+  Z.page.onDialog = d => d.accept();
+  await click(Z.page, 'Log out');
+  await Z.ctx.setOffline(false);
+  await waitText(Z.page, 'Enter your 4-digit PIN');
+  await pin(Z.page, '0000');
+  ok('another user signs in on the same phone: clear warning about the first user\'s unsent work', await waitText(Z.page, 'This phone holds 1 unsent report/attendance record from Pijay Tanjeco (Bridge RM_Team 1)'));
+  await click(Z.page, 'Open command center');
+  await Z.page.waitForTimeout(2000);
+  ok('…and it is NOT sent with the other user\'s sign-in', B.env.readAll_('Attendance').find(a => a.name === 'Joven Blanza').status === 'Sick' && (await ls(Z.page, 'bnlex.live.outbox') || '').includes('att|team1'));
+  Z.page.onDialog = d => d.accept();
+  await click(Z.page, 'Log out');
+  await waitText(Z.page, 'Enter your 4-digit PIN');
+  await pin(Z.page, '1111');
+  await waitText(Z.page, "Start today's report");
+  await click(Z.page, "Start today's report");
+  ok('when the original leadman signs in again, the queued change is sent (with its reason)', await until(() => B.env.readAll_('Attendance').find(a => a.name === 'Joven Blanza').status === 'Present', 15000) && /Joven is back/.test(attUpd().reason));
+  ok('Z: no page errors', Z.page.errors.length === 0, Z.page.errors.join(' | '));
   await Z.ctx.close();
 
   // ── App opens with no signal (service worker) ───────────────────────────
@@ -410,22 +459,26 @@ try {
   B.clock.offsetDays = 0;
 
   // ── Damaged / hand-edited data saved on the phone ───────────────────────
+  // The admin reopens the report (server: draft v2 with all fields); the phone's saved draft is damaged.
+  B.call({ action: 'reopenReport', token: adminTok, teamId: 'team2', reportDate: today, reason: 'Admin check', baseRev: report().rev });
   await L.page.evaluate(t => {
-    localStorage.setItem('bnlex.v3.day.' + t, JSON.stringify({ forms: { team2: 'x' }, att: { team2: [1, 2] }, photos: { team2: { before: 5 } }, attAt: { team2: { x: 1 } }, rev: { team2: 7 } }));
+    localStorage.setItem('bnlex.v3.day.' + t, JSON.stringify({ forms: { team2: { location: 5, details: '' } }, draftAt: { team2: '9:00 AM' }, att: { team2: [1, 2] }, photos: { team2: { before: 5 } }, attAt: { team2: { x: 1 } }, rev: { team2: 7 } }));
     localStorage.setItem('bnlex.live.outbox', '{"bad|key":{"x":1}}');
     localStorage.setItem('bnlex.v3.roster', 'not json');
     localStorage.setItem('bnlex.live.teams', '5');
     localStorage.setItem('bnlex.live.base', '[1,2]');
   }, today);
   await L.page.reload();
-  ok('corrupted local data: app still opens, warns, then shows the server truth', await waitText(L.page, 'damaged') && await waitText(L.page, 'Report submitted at', 10000));
+  ok('corrupted local data: app still opens and warns', await waitText(L.page, 'damaged'));
+  ok('…the damaged draft is NOT turned into an empty report: the server copy is shown', await until(async () => await L.page.inputValue('input[placeholder^="e.g. CANDABA"]') === 'Km.11+000 to km.10+000 C3 exit ramp') && report().location === 'Km.11+000 to km.10+000 C3 exit ramp');
+  ok('…and a copy of the damaged data is kept for recovery', /day\.|roster|outbox/.test(await ls(L.page, 'bnlex.quarantine') || ''));
 
   // ── Sign out ────────────────────────────────────────────────────────────
-  const tok = JSON.parse(await ls(L.page, 'bnlex.live.session')).token;
+  const tok = JSON.parse(await ls(L.page, 'bnlex.live.session')).token, lDk = JSON.parse(await ls(L.page, 'bnlex.live.deviceKey'));
   await click(L.page, 'Log out');
   ok('logout returns to PIN screen', await waitText(L.page, 'Enter your 4-digit PIN'));
   await L.page.waitForTimeout(300);
-  ok('logout revoked the session on the server', B.call({ action: 'load', token: tok }).auth === true);
+  ok('logout revoked the session on the server', B.raw({ action: 'load', token: tok, deviceKey: lDk }).auth === true);
   await L.page.reload();
   ok('logged out stays logged out after reload', await waitText(L.page, 'Enter your 4-digit PIN'));
 

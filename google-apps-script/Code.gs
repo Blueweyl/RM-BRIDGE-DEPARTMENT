@@ -11,6 +11,7 @@
  *   Revisions     snapshot of a report each time it is submitted, reopened or its attendance changes
  *   AuditLog      append-only, hash-chained: who did what, when, before/after, reason
  *   Sessions      one row per sign-in; revoked on logout, PIN change or signOutEveryone()
+ *   Requests      idempotency ledger: every accepted write's request ID and its answer (a retry gets the same answer)
  * Photos live in Drive: "Bridge NLEX Daily Report Photos/<yyyy-mm-dd>/<team>/".
  *
  * The web app (frontend/) calls doPost() with JSON. The server never trusts the client for
@@ -29,7 +30,9 @@ var PHOTO_FOLDER_ID = '';
 function db_() {
   return SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
 }
-var SESSION_HOURS = { leadman: 14 * 24, admin: 12 };   // leadmen work offline for days; admin sessions are short
+// Sessions are short and bound to the phone that signed in. Work queued offline is kept on the phone
+// and sent after the next sign-in, so a short leadman session never loses data.
+var SESSION_HOURS = { leadman: 72, admin: 8 };
 var SETUP_KEY_DAYS = 7;                                 // a setup link can enrol new phones for this long
 var MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 var LOGIN_LIMITS = { perDevice: 5, global: 20, minutes: 15 };
@@ -80,18 +83,21 @@ var TABLES = {
   AuditLog: [
     ['auditId', 'Audit ID'], ['at', 'Time'], ['user', 'User'], ['role', 'Role'], ['teamId', 'Team ID'], ['action', 'Action'],
     ['entity', 'Entity'], ['entityId', 'Entity ID'], ['before', 'Before'], ['after', 'After'], ['reason', 'Reason / Detail'],
-    ['requestId', 'Request ID'], ['device', 'Device'], ['hash', 'Chain Hash'],
+    ['requestId', 'Request ID'], ['device', 'Device'], ['hash', 'Chain Hash'], ['userId', 'User ID'], ['rev', 'Report Revision'],
   ],
   Sessions: [
     ['sessionId', 'Session ID'], ['userId', 'User ID'], ['role', 'Role'], ['teamId', 'Team ID'], ['device', 'Device'],
     ['createdAt', 'Created'], ['expiresAt', 'Expires'], ['revokedAt', 'Revoked'], ['revokedReason', 'Revoked Reason'],
   ],
+  Requests: [
+    ['key', 'Key'], ['userId', 'User ID'], ['action', 'Action'], ['requestId', 'Request ID'], ['bodyHash', 'Body Hash'], ['at', 'Time'], ['result', 'Answer (JSON)'],
+  ],
 };
-var KEY_FIELD = { Users: 'userId', Teams: 'teamId', Roster: 'personId', Attendance: 'key', DailyReports: 'key', Photos: 'photoId', Revisions: 'revisionId', Sessions: 'sessionId' };
+var KEY_FIELD = { Users: 'userId', Teams: 'teamId', Roster: 'personId', Attendance: 'key', DailyReports: 'key', Photos: 'photoId', Revisions: 'revisionId', Sessions: 'sessionId', Requests: 'key' };
 var FORMULA_FIELDS = { beforePreview: true, afterPreview: true };
 // Old header → new header, used when setup() upgrades an existing Sheet.
 var HEADER_ALIASES = { 'Note / Reason': ['Absence Reason'], 'Not Present (status)': ['Absent (reason)'] };
-var PROTECTED_TABS = ['Users', 'AuditLog', 'Revisions', 'Sessions'];
+var PROTECTED_TABS = ['Users', 'AuditLog', 'Revisions', 'Sessions', 'Requests'];
 
 // Real crews. setup() copies them into the Sheet once (only when the tabs are empty).
 // No PINs here: setup() makes random ones and prints them once.
@@ -204,7 +210,7 @@ function newSetupKey_() {
   props.setProperty('SETUP_KEY_EXPIRES', String(Date.now() + SETUP_KEY_DAYS * 86400000));
 }
 
-/** n different 4-digit PINs, avoiding obvious ones like 0000, 1111 or 1234. */
+/** n different random 4-digit PINs, avoiding weak ones (all digits the same, or a run like 1234). */
 function randomPins_(n) {
   var out = [], weak = /^(\d)\1{3}$|^(0123|1234|2345|3456|4567|5678|6789|9876|4321)$/;
   while (out.length < n) {
@@ -272,14 +278,15 @@ function doPost(e) {
       LOCKED = true;
     }
     REQ.requestId = /^[A-Za-z0-9-]{8,64}$/.test(String(req.requestId || '')) ? String(req.requestId) : '';
-    var sess = fn.public ? null : verify_(req.token);
+    var sess = fn.public ? null : verify_(req.token, req.deviceKey);
     if (sess) REQ.device = sess.device;
     if (fn.admin && !isAdmin_(sess)) deny_(sess, req.action, 'admin-only action');
-    // A retried write (same request ID from the same user) gets the first answer back and changes nothing.
-    var seen = fn.writes && sess && REQ.requestId ? 'rq:' + sess.user.userId + ':' + req.action + ':' + REQ.requestId : '';
-    if (seen) { var prev = CacheService.getScriptCache().get(seen); if (prev) { var o = JSON.parse(prev); o.replay = true; return out_(o); } }
+    if (fn.idem && !REQ.requestId) throw new Error('Missing request ID — update the app, then try again.');
+    // A retried write (same user + action + request ID) gets the first answer back and changes nothing.
+    var idem = fn.writes && sess && REQ.requestId ? idemCheck_(sess, req) : null;
+    if (idem && idem.answer) return out_(idem.answer);
     var result = fn.run(sess, req);
-    if (seen && result && result.ok) { try { CacheService.getScriptCache().put(seen, JSON.stringify(result), 21600); } catch (e) {} }
+    if (idem && result && result.ok) idemStore_(idem, result);
     return out_(result);
   } catch (err) {
     var msg = String(err && err.message || err);
@@ -299,11 +306,11 @@ var ACTIONS = {
   logout:         { run: logout_, writes: true },
   me:             { run: function (s) { return { ok: true, user: s.user }; } },
   load:           { run: load_ },
-  saveAttendance: { run: saveAttendance_, writes: true },
-  uploadPhoto:    { run: uploadPhoto_, writes: true },
+  saveAttendance: { run: saveAttendance_, writes: true, idem: true },
+  uploadPhoto:    { run: uploadPhoto_, writes: true },                  // idempotent by the phone's photo ID (clientId)
   removePhoto:    { run: removePhoto_, writes: true },
-  submitReport:   { run: submitReport_, writes: true },
-  reopenReport:   { run: reopenReport_, writes: true },
+  submitReport:   { run: submitReport_, writes: true, idem: true },
+  reopenReport:   { run: reopenReport_, writes: true, idem: true },
   addMember:      { run: addMember_, writes: true, admin: true },
   archiveMember:  { run: archiveMember_, writes: true, admin: true },
   restoreMember:  { run: restoreMember_, writes: true, admin: true },
@@ -312,6 +319,38 @@ var ACTIONS = {
   revisions:      { run: revisions_, admin: true },
   auditLog:       { run: auditLog_, admin: true },
 };
+
+/** Canonical JSON (sorted keys) so the same request always hashes the same. */
+function canon_(v) {
+  if (Array.isArray(v)) return '[' + v.map(canon_).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + canon_(v[k]); }).join(',') + '}';
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+/**
+ * Idempotency: the answer to an accepted write is kept in the Requests tab (durable) and the script
+ * cache (fast). The same request ID again returns that answer; the same ID with different data is refused.
+ */
+function idemCheck_(s, req) {
+  var body = {};
+  Object.keys(req).forEach(function (k) { if (k !== 'token' && k !== 'deviceKey' && k !== 'requestId') body[k] = req[k]; });
+  var key = s.user.userId + '|' + req.action + '|' + REQ.requestId, hash = hmac_(canon_(body), 'AUDIT_SECRET').slice(0, 24);
+  var hit = null, c = CacheService.getScriptCache().get('rq:' + key);
+  if (c) { try { hit = JSON.parse(c); } catch (e) {} }
+  if (!hit) { var row = row_('Requests', key); if (row) { try { hit = { hash: row.bodyHash, result: JSON.parse(row.result) }; } catch (e) {} } }
+  if (hit) {
+    if (hit.hash !== hash) deny_(s, req.action, 'This request ID was already used for different data.');
+    var o = hit.result; o.replay = true;
+    return { answer: o };
+  }
+  return { key: key, hash: hash, action: req.action, userId: s.user.userId };
+}
+
+function idemStore_(idem, result) {
+  var json = JSON.stringify(result);
+  upsert_('Requests', idem.key, { key: idem.key, userId: idem.userId, action: idem.action, requestId: REQ.requestId, bodyHash: idem.hash, at: now_(), result: json.slice(0, 45000) });
+  try { CacheService.getScriptCache().put('rq:' + idem.key, JSON.stringify({ hash: idem.hash, result: result }), 21600); } catch (e) { Logger.log('request cache: ' + e); }
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // Auth: device enrolment → PIN sign-in → server-side session
@@ -375,7 +414,7 @@ function userFor_(u) {
   return { userId: u.userId, role: 'leadman', teamId: u.teamId, name: u.name, team: t.name || u.teamId, short: t.short || '' };
 }
 
-function verify_(token) {
+function verify_(token, deviceKey) {
   var p = unsign_(token, 'TOKEN_SECRET');
   if (!p || !p.s || !p.u) throw new Error('AUTH: Please sign in again.');
   if (!p.exp || p.exp < Date.now()) throw new Error('AUTH: Session expired. Please sign in again.');
@@ -385,6 +424,13 @@ function verify_(token) {
   // Changing a PIN in the Users tab (or setting Active = No) signs that person out everywhere.
   if (!u || u.active === 'No' || pinTag_(u.pin) !== p.pv || (u.role !== 'admin' && u.role !== 'leadman')) throw new Error('AUTH: Please sign in again.');
   if (u.role === 'leadman') { var t = row_('Teams', u.teamId); if (!t || t.active === 'No') throw new Error('AUTH: Please sign in again.'); }
+  // Device-bound: the token only works together with the device key of the phone that signed in.
+  var dk = unsign_(deviceKey, 'DEVICE_SECRET');
+  if (!dk || dk.d !== ses.device) {
+    REQ.device = dk && dk.d ? dk.d : 'unknown';
+    audit_(userFor_(u), u.teamId || '', 'DENIED session used from another device', 'session', p.s, null, null, 'Token presented without the device key of the phone that signed in');
+    throw new Error('AUTH: This sign-in belongs to another phone. Please sign in again.');
+  }
   return { user: userFor_(u), sid: p.s, device: ses.device };
 }
 
@@ -481,7 +527,7 @@ function validDate_(d) {
 function needRev_(s, rep, baseRev, action) {
   var cur = rep ? String(rep.rev || '0') : '0', sent = String(baseRev == null ? '' : baseRev);
   if (sent !== cur) {
-    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Refused: changed on another device');
+    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Refused: changed on another device', cur);
     throw new Error('CONFLICT: This report was changed on another device. Your entries are kept on this phone — check them and submit again.');
   }
 }
@@ -669,7 +715,7 @@ function saveAttendance_(s, req) {
   audit_(s.user, teamId, hadAttendance ? 'attendance updated' : 'attendance submitted', 'report', rep.reportId,
     hadAttendance ? was : null,
     hadAttendance ? now_is : { crewPresent: present + '/' + rows.length, notPresent: absentList },
-    hadAttendance ? reason + ' — ' + changes.join('; ') : '');
+    hadAttendance ? reason + ' — ' + changes.join('; ') : '', rev);
   return { ok: true, attendanceSubmittedAt: now, crewPresent: present + '/' + rows.length, rev: rev, reportId: rep.reportId };
 }
 
@@ -724,7 +770,7 @@ function uploadPhoto_(s, req) {
   };
   upsert_('Photos', photoId, photo);
   audit_(s.user, teamId, req.type + ' photo ' + (replaced.length ? 'replaced' : 'uploaded'), 'photo', photoId,
-    replaced.length ? { photoId: replaced.join(',') } : null, { photoId: photoId, reportId: rep.reportId, bytes: bytes.length }, photo.originalFilename);
+    replaced.length ? { photoId: replaced.join(',') } : null, { photoId: photoId, reportId: rep.reportId, bytes: bytes.length }, photo.originalFilename, rep.rev);
   return { ok: true, photo: photo };
 }
 
@@ -864,7 +910,7 @@ function submitReport_(s, req) {
   var rep = row_('DailyReports', key);
   revision_(s, rep, 'submitted', row.version === '1' ? '' : changes.join('; '));
   audit_(s.user, teamId, row.version === '1' ? 'report submitted' : 'report resubmitted (v' + row.version + ')', 'report', rep.reportId,
-    old.version > 0 ? beforeVals : null, afterVals, changes.length ? changes.join('; ') : (row.version === '1' ? clean.status + ' · ' + short_(clean.location) : 'no field changes'));
+    old.version > 0 ? beforeVals : null, afterVals, (old.reopenReason && row.version !== '1' ? 'Reopened because: ' + old.reopenReason + ' — ' : '') + (changes.length ? changes.join('; ') : (row.version === '1' ? clean.status + ' · ' + short_(clean.location) : 'no field changes')), row.rev);
   return { ok: true, submittedAt: now, submittedBy: s.user.name, version: row.version, rev: row.rev, reportId: rep.reportId, late: row.late };
 }
 
@@ -879,7 +925,7 @@ function reopenReport_(s, req) {
   revision_(s, old, 'reopened', reason);
   var rev = String(Number(old.rev || 0) + 1);
   upsert_('DailyReports', key, { state: 'draft', updatedAt: now_(), editedBy: s.user.name, rev: rev, reopenReason: reason, lastRequestId: REQ.requestId });
-  audit_(s.user, teamId, 'report reopened for editing', 'report', old.reportId, { state: 'submitted', version: old.version }, { state: 'draft' }, reason);
+  audit_(s.user, teamId, 'report reopened for editing', 'report', old.reportId, { state: 'submitted', version: old.version, rev: old.rev }, { state: 'draft', rev: rev }, reason, rev);
   return { ok: true, rev: rev };
 }
 
@@ -959,9 +1005,9 @@ function exportCsv_(s, req) {
     });
   var csv = [head].concat(rows).map(function (x) { return x.map(csvCell_).join(','); }).join('\r\n');
   var name = 'NLEX_Daily_Report_' + from + '_to_' + to;
-  var xlsxUrl = exportXlsx_(name, [head].concat(rows));
-  audit_(s.user, '', 'export', 'export', '', null, { from: from, to: to, rows: rows.length }, '');
-  return { ok: true, csv: csv, rows: rows.length, from: from, to: to, filename: name + '.csv', xlsxUrl: xlsxUrl };
+  var x = exportXlsx_(name, [head].concat(rows));
+  audit_(s.user, '', 'export', 'export', '', null, { from: from, to: to, rows: rows.length }, x.error ? 'xlsx failed: ' + x.error : '');
+  return { ok: true, csv: csv, rows: rows.length, from: from, to: to, filename: name + '.csv', xlsxUrl: x.url, xlsxError: x.error };
 }
 
 /**
@@ -974,10 +1020,10 @@ function exportXlsx_(name, grid) {
     var safe = grid.map(function (r) { return r.map(safeCell_); });
     sh.getRange(1, 1, safe.length, safe[0].length).setNumberFormats(safe.map(function (r) { return r.map(function () { return '@'; }); })).setValues(safe);
     DriveApp.getFileById(x.getId()).moveTo(subFolder_(photoRoot_(), 'Exports'));
-    return 'https://docs.google.com/spreadsheets/d/' + x.getId() + '/export?format=xlsx';
+    return { url: 'https://docs.google.com/spreadsheets/d/' + x.getId() + '/export?format=xlsx', error: '' };
   } catch (e) {
     Logger.log('xlsx export failed: ' + e);
-    return '';
+    return { url: '', error: String(e && e.message || e).slice(0, 200) };
   }
 }
 
@@ -1198,14 +1244,17 @@ function deleteRow_(name, key) {
 
 function auditHash_(prev, a) {
   var body = [prev, a.auditId, a.at, a.user, a.role, a.teamId, a.action, a.entity, a.entityId, a.before, a.after, a.reason, a.requestId, a.device].join('␞');
+  // User ID and revision were added later: rows written before that keep their original hash.
+  if (a.userId || a.rev) body += '␞' + (a.userId || '') + '␞' + (a.rev || '');
   return hmac_(body, 'AUDIT_SECRET').slice(0, 24);
 }
 
 /**
- * Append one audit entry: who, what, when, which entity, before/after, reason. Rows are only ever
+ * Append one audit entry: who (name, role, user ID), what, when (server clock), which entity and report
+ * revision, before/after, reason. Rows are only ever
  * appended; each carries a hash of the previous one, so verifyAuditLog() spots hand edits.
  */
-function audit_(user, teamId, action, entity, entityId, before, after, reason) {
+function audit_(user, teamId, action, entity, entityId, before, after, reason, rev) {
   var lock = null;
   try {
     if (!LOCKED) { lock = LockService.getScriptLock(); if (!lock.tryLock(10000)) lock = null; }
@@ -1214,7 +1263,7 @@ function audit_(user, teamId, action, entity, entityId, before, after, reason) {
     var j = function (o) { return o == null ? '' : (typeof o === 'string' ? o : JSON.stringify(o)).slice(0, 5000); };
     var a = { auditId: 'au-' + Utilities.getUuid().slice(0, 13), at: now_(), user: user.name || '', role: user.role || '', teamId: teamId || '',
       action: action, entity: entity || '', entityId: entityId || '', before: j(before), after: j(after), reason: String(reason || '').slice(0, 2000),
-      requestId: REQ.requestId || '', device: REQ.device || '' };
+      requestId: REQ.requestId || '', device: REQ.device || '', userId: user.userId || '', rev: rev == null ? '' : String(rev) };
     a.hash = auditHash_(prev, a);
     var row = last + 1;
     if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 500);

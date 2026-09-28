@@ -22,7 +22,7 @@ Sheet inside that folder.)
    **Go to … (unsafe)** → **Allow**. ("Unsafe" only means Google has not reviewed a script you wrote yourself.
    It asks for access to this Sheet and your Drive, to save photos.)
 3. The Sheet now has the tabs **Users, Teams, Roster, Attendance, DailyReports, Photos,
-   Revisions, AuditLog, Sessions**, with the 4 teams and 34 crew members. A photo folder is
+   Revisions, AuditLog, Sessions, Requests**, with the 4 teams and 34 crew members. A photo folder is
    created, or the existing **Bridge NLEX Daily Report Photos** folder is used.
 
 **Already using an older version?** Paste the new `Code.gs`, run **setup** again, then

@@ -60,6 +60,14 @@ ok('[3] server-side session expiry enforced', call({ action: 'load', token: T.t2
 B.env.upsert_('Sessions', payload.s, { expiresAt: String(Date.now() + 3600e3) });
 ok('session works again once valid', call({ action: 'load', token: T.t2 }).ok);
 
+// ── Sessions are bound to the phone that signed in (stolen token) ───────
+r = B.raw({ action: 'load', token: T.t2 });
+ok('[3] stolen token without the phone\'s device key refused', r.auth === true);
+r = B.raw({ action: 'load', token: T.t2, deviceKey: B.deviceKey('someOtherPhone') });
+ok('[3] stolen token used with another enrolled phone\'s key refused', r.auth === true);
+ok('[3] stolen-token attempt written to the audit log', B.env.readAll_('AuditLog').some(a => a.action === 'DENIED session used from another device' && a.user === 'Glenn Butiong'));
+ok('sessions are short: leadman 72 h, admin 8 h', Math.abs(lead2.expiresAt - Date.now() - 72 * 3600e3) < 60e3 && Math.abs(admin.expiresAt - Date.now() - 8 * 3600e3) < 60e3);
+
 // ── [1] forged teamId / [2] leadman calling admin endpoints ─────────────
 let L = call({ action: 'load', token: T.t2 });
 ok('leadman load only returns own team', L.ok && L.teams.length === 1 && L.teams[0].teamId === 'team2' && L.roster.every(m => m.teamId === 'team2') && L.roster.length === 9);
@@ -107,7 +115,7 @@ r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: t
 ok('changing submitted attendance needs a reason', !r.ok && r.needReason && rev1() === '1', JSON.stringify(r));
 r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people: people2, baseRev: rev1(), requestId: uid(), reason: 'Ian went home sick at 9am' });
 const attAudit = B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
-ok('attendance change audited: old value, new value, user, server time, reason', r.ok && rev1() === '2' && attAudit.user === 'Glenn Butiong' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(attAudit.at)
+ok('attendance change audited: old value, new value, user (name + ID), server time, reason, revision', r.ok && rev1() === '2' && attAudit.user === 'Glenn Butiong' && attAudit.userId === 'lead-team2' && attAudit.rev === '2' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(attAudit.at)
   && JSON.parse(attAudit.before)['Ian Enriquez'].status === 'Present' && JSON.parse(attAudit.after)['Ian Enriquez'].status === 'Sick' && /Ian went home sick/.test(attAudit.reason), attAudit && JSON.stringify(attAudit));
 ok('previous attendance kept as a revision', B.env.readAll_('Revisions').some(v => v.kind === 'attendance before update' && JSON.parse(v.snapshot).attendance.find(a => a.name === 'Ian Enriquez').status === 'Present'));
 r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: rev1(), requestId: uid(), reason: 'Ian came back after lunch' });
@@ -159,11 +167,17 @@ ok('photo IDs must match the server (tampered IDs refused)', submit({ ...form, s
 const cAfter = uid();
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, originalFilename: 'IMG_0002.jpg', clientId: cAfter });
 const afterId = r.photo.photoId;
-const subReq = uid();
-r = submit(form, { afterPhotoId: afterId, requestId: subReq });
+const subReq = uid(), subRev = B.env.row_('DailyReports', 'team2|' + today).rev;
+r = submit(form, { afterPhotoId: afterId, requestId: subReq, baseRev: subRev });
 ok('report submitted', r.ok && r.version === '1' && r.submittedBy === 'Glenn Butiong' && r.reportId === reportId, JSON.stringify(r));
 const repAfter = B.env.row_('DailyReports', 'team2|' + today);
-ok('[4] duplicate submit with same request → replay, still version 1', submit(form, { afterPhotoId: afterId, requestId: subReq }).replay === true && B.env.row_('DailyReports', 'team2|' + today).version === '1');
+ok('[4] duplicate submit with same request → replay, still version 1', submit(form, { afterPhotoId: afterId, requestId: subReq, baseRev: subRev }).replay === true && B.env.row_('DailyReports', 'team2|' + today).version === '1');
+ok('[4] accepted writes are kept in the durable Requests ledger', B.env.readAll_('Requests').some(q => q.requestId === subReq && q.action === 'submitReport' && q.userId === 'lead-team2'));
+for (const k of Object.keys(B.cache)) if (k.startsWith('rq:')) delete B.cache[k];
+ok('[4] replay still works after the fast cache is gone (ledger)', submit(form, { afterPhotoId: afterId, requestId: subReq, baseRev: subRev }).replay === true && B.env.row_('DailyReports', 'team2|' + today).version === '1');
+r = submit({ ...form, location: 'Somewhere else' }, { afterPhotoId: afterId, requestId: subReq, baseRev: subRev });
+ok('[4] same request ID with different data is refused (and audited), nothing changed', r.denied && /different data/.test(r.error) && B.env.row_('DailyReports', 'team2|' + today).location === form.location);
+ok('writes without a request ID are refused', /request ID/.test(B.raw({ action: 'submitReport', token: T.t2, deviceKey: B.deviceKey('phoneB'), teamId: 'team2', reportDate: today, report: form, baseRev: '0' }).error || ''));
 ok('[5] second submit (double-click, new request) refused', /already submitted/.test(submit(form, { afterPhotoId: afterId }).error));
 ok('photo change refused after submit', /Edit report/.test(call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, clientId: uid() }).error));
 ok('attendance change refused after submit', /Edit report/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: repAfter.rev }).error));
@@ -193,6 +207,9 @@ const after2 = r.photo.photoId;
 r = submit({ ...form, location: 'Km.12' }, { afterPhotoId: after2 });
 ok('resubmit bumps version', r.ok && r.version === '2', JSON.stringify(r));
 const last = B.env.readAll_('AuditLog').filter(a => a.action.startsWith('report resubmitted')).pop();
+ok('report audit carries user ID and the new revision', last && last.userId === 'lead-team2' && last.rev === B.env.row_('DailyReports', 'team2|' + today).rev && /Reopened because: Wrong location typed/.test(last.reason), last && JSON.stringify(last));
+const reo = B.env.readAll_('AuditLog').filter(a => a.action === 'report reopened for editing').pop();
+ok('reopen audit: reason, old/new state and revision', reo.reason === 'Wrong location typed' && JSON.parse(reo.before).state === 'submitted' && JSON.parse(reo.after).state === 'draft' && reo.rev === JSON.parse(reo.after).rev);
 ok('audit records before/after and change summary', last && /location: .* → "Km.12"/.test(last.reason) && /after photo replaced/.test(last.reason) && JSON.parse(last.before).location === form.location && JSON.parse(last.after).location === 'Km.12', last && last.reason);
 ok('replaced photo kept in Photos tab', B.env.readAll_('Photos').filter(p => p.teamId === 'team2' && p.type === 'after').map(p => p.status).join() === 'Replaced,Active');
 ok('original submitted record never destroyed (2 submit snapshots)', B.env.readAll_('Revisions').filter(v => v.reportId === reportId && v.kind === 'submitted').length === 2);

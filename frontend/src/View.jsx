@@ -110,14 +110,7 @@ function Login({ v }) {
           )}
         </div>
 
-        {/* global __DEMO__ */ __DEMO__ && login.showDemoPins && (
-          <div style={css('background:#1B3A63;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;')}>
-            <div style={css("font-family:'JetBrains Mono',monospace;font-size:10px;color:#AFC0D6;letter-spacing:1px;text-transform:uppercase;")}>Demo PINs</div>
-            <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;color:#FFFFFF;')}>
-              <span>0000 · Admin</span><span>1111 · RM Team 1</span><span>2222 · Segment 10</span><span>3333 · Epoxy 1</span><span>4444 · Epoxy 2</span>
-            </div>
-          </div>
-        )}
+        {login.demoPins}
       </div>
     </div>
   );
@@ -657,6 +650,9 @@ export default function View({ v }) {
         <div role="status" style={css('position:sticky;top:0;z-index:70;min-height:40px;display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 14px;background:#6B3A00;color:#FFFFFF;font-size:14px;font-weight:700;text-align:center;')}>
           No signal — keep working, everything is saved on this phone. Submitting needs signal.
         </div>
+      )}
+      {v.foreignWarn && (
+        <div role="alert" style={css('padding:10px 14px;background:#A8261B;color:#FFFFFF;font-size:14px;font-weight:700;text-align:center;overflow-wrap:anywhere;')}>{v.foreignWarn}</div>
       )}
       {v.isLogin && <Login v={v} />}
       {v.isAdmin && <Admin v={v} />}

@@ -72,7 +72,18 @@ function makeBackend(opts = {}) {
   // Test helper: a login without a deviceKey enrols `body.device` once with the real setup key.
   const devices = {};
   const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: props.SETUP_KEY, deviceLabel: name }).deviceKey);
-  const call = body => raw(body.action === 'login' && body.deviceKey === undefined ? { ...body, deviceKey: deviceKey(body.device || 'test') } : body);
+  // Test helper: a token is sent with the device key of the phone that signed in (as the app does),
+  // and writes that need one get a fresh request ID unless the test sets its own.
+  const tokenDevice = {};
+  const IDEM = ['saveAttendance', 'submitReport', 'reopenReport'];
+  const call = body => {
+    if (body.action === 'login' && body.deviceKey === undefined) body = { ...body, deviceKey: deviceKey(body.device || 'test') };
+    else if (body.token && body.deviceKey === undefined && tokenDevice[body.token]) body = { ...body, deviceKey: tokenDevice[body.token] };
+    if (IDEM.includes(body.action) && body.requestId === undefined) body = { ...body, requestId: crypto.randomUUID() };
+    const out = raw(body);
+    if (body.action === 'login' && out.ok) tokenDevice[out.token] = body.deviceKey;
+    return out;
+  };
   return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_ };
 }
 module.exports = { makeBackend };

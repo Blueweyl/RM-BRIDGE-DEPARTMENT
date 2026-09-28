@@ -41,14 +41,15 @@ npm install
 npm run dev            # local dev server (demo mode)
 npm run build          # production files → frontend/dist/ (no demo data)
 npm run build:demo     # offline demo build (fixed demo PINs), for training / the standalone HTML
-npm run test:backend   # 151 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
-npm run test:e2e       # 95 end-to-end checks: leadman phones + admin computer against the real backend code
+npm run test:backend   # 161 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
+npm run test:e2e       # 109 end-to-end checks: leadman phones + admin computer against the real backend code
 ```
 
 - `src/App.jsx`: the design's logic class; lines marked `// live` hand off to `live.js`.
 - `src/live.js`, `src/api.js`, `src/idb.js`: backend calls, device enrolment + session, the outbox
   (Draft → Pending sync → Syncing → Server confirmed / Conflict), Manila time, IndexedDB photo queue.
-- `src/demo.js`: demo PINs, crews and sample reports — compiled into demo builds only.
+- `src/demo.jsx`: everything demo-only — the demo PINs, the Demo PINs box, sample crews and reports.
+  Compiled into demo builds only; the production files contain no PINs at all (checked by the e2e test).
 - `src/View.jsx`: the screens (Login, Admin, Leadman Activity/Attendance/History).
 
 ## Backend (`google-apps-script/`)

@@ -10,7 +10,30 @@
 const P = 'bnlex.live.';
 const URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/;
 
-function get(k) { try { const v = localStorage.getItem(P + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function get(k) {
+  let v = null;
+  try { v = localStorage.getItem(P + k); } catch (e) { return null; }
+  if (!v) return null;
+  try { return JSON.parse(v); } catch (e) { quarantine(P + k, v); return null; }
+}
+
+/**
+ * Saved data that cannot be read is never silently thrown away or turned into an empty record:
+ * a copy is kept under "bnlex.quarantine" (last 5) for recovery, and the app loads the server copy.
+ * Returns false when even the copy could not be kept (phone storage full).
+ */
+export function quarantine(key, raw) {
+  try {
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem('bnlex.quarantine') || '[]'); if (!Array.isArray(list)) list = []; } catch (e) { list = []; }
+    list.push({ key, at: new Date().toISOString(), raw: String(raw).slice(0, 200000) });
+    localStorage.setItem('bnlex.quarantine', JSON.stringify(list.slice(-5)));
+    quarantined.push(key);
+    return true;
+  } catch (e) { quarantined.push(key + ' (copy NOT kept: storage full)'); return false; }
+}
+/** Keys found damaged since the app started (for the warning shown to the user). */
+export const quarantined = [];
 function put(k, v) { try { if (v == null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, JSON.stringify(v)); } catch (e) {} }
 
 /** Store a backend URL passed as ?backend=… (setup link), then remove it from the address bar. */
@@ -57,7 +80,7 @@ export function hasDevice() { return !!(get('deviceKey') || get('key')); }
 export function session() {
   const s = get('session');
   const valid = s && typeof s === 'object' && typeof s.token === 'string' && typeof s.expiresAt === 'number' && s.user && typeof s.user === 'object' && typeof s.user.role === 'string';
-  return valid && s.expiresAt > Date.now() ? s : null;
+  return valid && s.expiresAt > nowMs() ? s : null;   // server-corrected clock: a wrong phone clock neither ends nor extends it
 }
 export function clearSession() { put('session', null); }
 export function setSessionUser(user) { const s = session(); if (s) put('session', { ...s, user }); }
@@ -115,7 +138,8 @@ export async function call(action, data = {}, { timeout = 45000 } = {}) {
     res = await fetch(backendUrl(), {
       method: 'POST', redirect: 'follow', signal: ctl.signal,
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ ...data, action, token: s ? s.token : undefined }),
+      // The token only works together with this phone's device key (sessions are device-bound).
+      body: JSON.stringify({ ...data, action, token: s ? s.token : undefined, deviceKey: data.deviceKey || (s ? get('deviceKey') || undefined : undefined) }),
     });
   } catch (e) {
     throw new ApiError(e && e.name === 'AbortError' ? 'Google did not answer in time. Nothing was confirmed — try again.' : 'Cannot reach the server. Check your signal and try again.', { offline: true });
@@ -152,7 +176,7 @@ export function timeOf(stamp) {
 export async function logout() {
   const s = session();
   clearSession();
-  if (s && online()) { try { await fetch(backendUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: s.token }) }); } catch (e) {} }
+  if (s && online()) { try { await fetch(backendUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: s.token, deviceKey: get('deviceKey') }) }); } catch (e) {} }
 }
 
 /** Small JSON values in localStorage (drafts, outbox). Returns false when the phone's storage is full. */

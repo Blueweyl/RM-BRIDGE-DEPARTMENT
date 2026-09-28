@@ -82,10 +82,10 @@ export const liveMethods = {
       const it = raw[k];
       const good = KEY_RE.test(k) && it && typeof it === 'object' && it.payload && typeof it.payload === 'object' && typeof it.reqId === 'string'
         && typeof it.teamId === 'string' && typeof it.date === 'string' && typeof it.userId === 'string' && STATES.includes(it.state);
-      if (!good) { this.damaged = true; return; }
+      if (!good) { if (!this._qOb) { this._qOb = true; api.quarantine('bnlex.live.outbox', JSON.stringify(raw)); } this.damaged = true; return; }
       ob[k] = it.state === 'syncing' ? { ...it, state: 'pending', sent: true } : it;
     });
-    else if (raw != null) this.damaged = true;
+    else if (raw != null) { api.quarantine('bnlex.live.outbox', JSON.stringify(raw)); this.damaged = true; }
     this._ob = ob;
     this._base = {};
     const b = api.loadLocal('base');
@@ -107,7 +107,13 @@ export const liveMethods = {
     const next = { ...this._base };
     if (rev == null) delete next[key]; else next[key] = String(rev);
     this._base = next;
-    api.saveLocal('base', next);
+    this.store('base', next);
+  },
+  /** Save a small value on the phone; a failure (storage full) is shown, never ignored. */
+  store(k, v) {
+    const ok = api.saveLocal(k, v);
+    if (!ok && !this._storeWarned) { this._storeWarned = true; this.toast('Phone storage full — some sync information could not be saved on this phone. Free up space.', 'err'); setTimeout(() => { this._storeWarned = false; }, 60000); }
+    return ok;
   },
   markEdit(kind, id) {
     const key = kind + '|' + id + '|' + this.state.today;
@@ -126,6 +132,7 @@ export const liveMethods = {
 
   syncOf(kind, id, s) {
     const it = s.outbox && s.outbox[kind + '|' + id + '|' + s.today];
+    if (it && !this.mine(it)) return 'foreign';
     if (it) return it.state;
     if (kind === 'att') return s.attAt[id] && !s.attDirty[id] ? 'confirmed' : 'draft';
     return s.actAt[id] ? 'confirmed' : 'draft';
@@ -139,6 +146,7 @@ export const liveMethods = {
     const olderLine = older.length ? older.map(o => `${what} for ${this.fmtDate(o.date)}: ${o.state === 'pending' || o.state === 'syncing' ? 'waiting to send' : o.state === 'conflict' ? 'CONFLICT' : 'refused'}${o.error ? ' — ' + o.error : ''}`).join(' · ') : '';
     const olderActions = older.filter(o => o.state === 'conflict' || o.state === 'rejected').map(o => ({ label: `Discard ${this.fmtDate(o.date)}`, go: () => this.discardItem(kind + '|' + id + '|' + o.date) }));
     if (!it) return olderLine ? { tone: 'warn', title: 'Earlier day not sent', text: olderLine, actions: olderActions } : null;
+    if (!this.mine(it)) return { tone: 'err', title: `${what}: waiting for ${it.userName || 'another user'}`, text: `Queued on this phone by ${it.userName || 'another user'} (${it.teamName || it.teamId}) and not sent yet. It is only sent with their sign-in — they must sign in on this phone to send it.`, actions: [] };
     const act = [];
     if (it.state === 'pending') {
       if (s.online) act.push({ label: 'Send now', go: () => this.sendItem(key, true) });
@@ -154,10 +162,16 @@ export const liveMethods = {
   },
 
   /** Put a submit in the outbox. Returns the key, or null when the phone could not save it. */
+  /** Queued work belongs to the person who queued it. */
+  mine(it) { const sess = api.session(); return !!(sess && it && it.userId === sess.user.userId); },
+
   queue(kind, id, payload) {
     const s = this.state, key = kind + '|' + id + '|' + s.today, sess = api.session();
+    const prev = this._ob[key];
+    if (prev && !this.mine(prev)) { this.toast(`This phone holds an unsent ${KINDS[kind].toLowerCase()} by ${prev.userName || 'another user'} for this team and day. They must sign in here to send it first.`, 'err'); return null; }
     const baseRev = this._base[key] != null ? this._base[key] : String((s.rev || {})[id] || '0');
-    const item = { kind, teamId: id, date: s.today, userId: sess ? sess.user.userId : '', reqId: api.uuid(), baseRev, payload, state: 'pending', sent: false, error: '', at: api.manilaStamp() };
+    const t = this.constructor.T.find(x => x.id === id);
+    const item = { kind, teamId: id, teamName: t ? t.name : id, date: s.today, userId: sess ? sess.user.userId : '', userName: sess ? sess.user.name : '', reqId: api.uuid(), baseRev, payload, state: 'pending', sent: false, error: '', at: api.manilaStamp() };
     return this.obSet(key, item) ? key : null;
   },
 
@@ -179,12 +193,13 @@ export const liveMethods = {
   /** Send every pending record (oldest day first, attendance before its report). */
   async flushOutbox() {
     if (this._flushing || !api.session() || !api.online()) return;
+    this.scanForeign();
     this._flushing = true;
     try {
       const order = k => this._ob[k].date + (this._ob[k].kind === 'att' ? '0' : '1');
       for (const key of Object.keys(this._ob).sort((a, b) => order(a).localeCompare(order(b)))) {
         const it = this._ob[key];
-        if (it && it.state === 'pending') await this.sendItem(key, false);
+        if (it && it.state === 'pending' && this.mine(it)) await this.sendItem(key, false);
         if (!api.session()) break;
       }
     } finally { this._flushing = false; }
@@ -240,6 +255,7 @@ export const liveMethods = {
         this.setState(s => ({ actAt: { ...s.actAt, [id]: at }, showErr: { ...s.showErr, [id]: false }, saved: { ...s.saved, [id]: { ...s.forms[id] } }, draftAt: { ...s.draftAt, [id]: at } }), () => this.persist());
       }
       this.toast(today ? 'Report submitted — admin can see it now' : `Report for ${this.fmtDate(it.date)} submitted to Google Sheet`);
+      this.releasePhotos(id, it.date);
     }
     if (r.replay) this.refresh(true);
   },
@@ -267,22 +283,53 @@ export const liveMethods = {
 
   /** What is still on this phone, for the admin's view (sent with each load). */
   queueSummary() {
-    const out = Object.values(this._ob || {}).map(it => ({ kind: it.kind, date: it.date, state: it.state, error: it.error || '' }));
+    // Only this user's own work: another user's queue must never be reported under this user's team.
+    const sess = api.session(), me = sess ? sess.user.userId : '';
+    const out = Object.values(this._ob || {}).filter(it => it.userId === me).map(it => ({ kind: it.kind, date: it.date, state: it.state, error: it.error || '' }));
     const s = this.state;
     this.constructor.T.forEach(t => ['before', 'after'].forEach(k => {
       const p = s.photos[t.id] && s.photos[t.id][k];
-      if (p && p.pending) out.push({ kind: 'photo', date: p.date || s.today, state: p.rejected ? 'failed' : 'pending', error: p.rejected || p.error || '' });
+      if (p && p.pending && (!p.userId || p.userId === me)) out.push({ kind: 'photo', date: p.date || s.today, state: p.rejected ? 'failed' : 'pending', error: p.rejected || p.error || '' });
     }));
-    Object.values(this._failedPhotos || {}).forEach(f => out.push({ kind: 'photo', date: f.date, state: 'failed', error: f.error }));
+    Object.values(this._failedPhotos || {}).filter(f => !f.userId || f.userId === me).forEach(f => out.push({ kind: 'photo', date: f.date, state: 'failed', error: f.error }));
     return out.slice(0, 20);
+  },
+
+  /**
+   * Work on this phone that belongs to someone other than the person signed in (records queued and
+   * photos not yet confirmed). It is kept and never sent with this sign-in; the screen says so.
+   */
+  async scanForeign() {
+    const sess = api.session();
+    if (!sess) return;
+    const me = sess.user.userId, who = {};
+    let photos = 0;
+    try {
+      for (const key of await idb.keys()) {
+        if (typeof key !== 'string' || !key.startsWith('ph:')) continue;
+        const rec = await idb.get(key).catch(() => null);
+        if (rec && rec.userId && rec.userId !== me && !rec.confirmed) { photos++; who[rec.userId] = who[rec.userId] || rec.userName || rec.userId; }
+      }
+    } catch (e) {}
+    if (photos !== (this.state.foreignPhotos || {}).count) this.setState({ foreignPhotos: { count: photos, names: Object.values(who) } });
+  },
+  foreignWarning(s) {
+    const sess = api.session();
+    if (!this.live || !sess) return '';
+    const items = Object.values(s.outbox || {}).filter(it => it.userId !== sess.user.userId);
+    const fp = s.foreignPhotos || { count: 0, names: [] };
+    if (!items.length && !fp.count) return '';
+    const names = [...new Set(items.map(it => `${it.userName || 'another user'} (${it.teamName || it.teamId})`).concat(fp.names))].join(', ');
+    const parts = [items.length ? `${items.length} unsent report/attendance record${items.length > 1 ? 's' : ''}` : '', fp.count ? `${fp.count} photo${fp.count > 1 ? 's' : ''} not yet confirmed` : ''].filter(Boolean).join(' and ');
+    return `⚠ This phone holds ${parts} from ${names}. They are kept and will NOT be sent with your sign-in — that person must sign in on this phone to send them.`;
   },
 
   /** Request IDs for one-off actions (reopen) survive a crash or reload. */
   reqId(key) {
-    if (!this._reqs[key]) { this._reqs[key] = api.uuid(); api.saveLocal('reqs', this._reqs); }
+    if (!this._reqs[key]) { this._reqs[key] = api.uuid(); this.store('reqs', this._reqs); }
     return this._reqs[key];
   },
-  doneReq(key) { delete this._reqs[key]; api.saveLocal('reqs', this._reqs); },
+  doneReq(key) { delete this._reqs[key]; this.store('reqs', this._reqs); },
 
   liveError(e, fallback) {
     if (e && e.auth) {
@@ -307,6 +354,7 @@ export const liveMethods = {
       }
       await new Promise(res => this.applyServer(d, res));
       if (!quiet) this.toast('Updated from Google Sheet', 'info');
+      this.releaseSubmitted(d.reports);
       this.flushOutbox();
     } catch (e) {
       this.setState({ loadErr: e.message });
@@ -319,7 +367,7 @@ export const liveMethods = {
     const T = teamsFrom(list);
     if (!T.length) return s;
     this.constructor.T = T;
-    api.saveLocal('teams', list);
+    this.store('teams', list);
     const missing = T.filter(t => !s.crews[t.id]);
     if (!missing.length) return s;
     const o = { crews: {}, att: {}, attAt: {}, actAt: {}, forms: {}, photos: {}, tabs: {}, showErr: {}, attErr: {}, newMember: {}, draftAt: {}, attDirty: {} };
@@ -434,6 +482,7 @@ export const liveMethods = {
         this.setState(s => this.useTeams(s, [{ teamId: u.teamId, name: u.team, short: u.short, leadman: u.name }]));
       }
       this.setState({ user: this.liveUser(u), pinError: false, busy: null });
+      this.scanForeign();
     } catch (e) {
       if (e.wrongPin) { this.setState({ pinError: true, busy: null }); setTimeout(() => this.setState({ pin: '', pinError: false }), 900); }
       else this.setState({ pin: '', busy: null, loginMsg: e.message });
@@ -449,7 +498,7 @@ export const liveMethods = {
   liveLogout() {
     const s = this.state;
     const waiting = this.constructor.T.some(t => ['before', 'after'].some(k => s.photos[t.id] && s.photos[t.id][k] && s.photos[t.id][k].pending));
-    const queued = Object.keys(this._ob || {}).length;
+    const queued = Object.values(this._ob || {}).filter(it => this.mine(it)).length;
     if ((waiting || queued) && !window.confirm(`${queued ? queued + ' report/attendance record(s) not confirmed by the server yet' : 'Some photos have not uploaded yet'}. They stay on this phone and send after you sign in again. Log out?`)) return;
     api.logout();
     this.setState({ screen: 'login', user: null, pin: '', pinError: false, loginMsg: null });
@@ -458,7 +507,7 @@ export const liveMethods = {
   async liveSubmitAtt(id) {
     if (this._inflight) return;                      // a double tap sends once
     const s = this.state, key = 'att|' + id + '|' + s.today, cur = this._ob[key];
-    if (cur && (cur.state === 'pending' || cur.state === 'syncing')) return this.sendItem(key, true);
+    if (cur && this.mine(cur) && (cur.state === 'pending' || cur.state === 'syncing')) return this.sendItem(key, true);
     const people = s.crews[id].map(m => { const a = s.att[id][m.name]; return { personId: m.id, status: a ? a.status : '', note: a ? a.note || '' : '' }; });
     if (people.some(p => !p.personId)) { this.refresh(true); return this.toast('Loading the crew list from Google Sheet — try again in a moment', 'err'); }
     let reason = '';
@@ -494,12 +543,12 @@ export const liveMethods = {
       if (full.length * 0.75 > MAX_UPLOAD) return this.toast('That photo is too large even after compressing — take it again', 'err');
     } catch (err) { return this.toast('Could not read that photo — try again (JPEG, PNG or WebP)', 'err'); }
     const clientId = api.uuid();
-    const rec = { clientId, teamId: id, date: s.today, type: key, dataUrl: full, preview, name: f.name, capturedAt: captured, location: (s.forms[id].location || '').trim(), userId: sess ? sess.user.userId : '' };
+    const rec = { clientId, teamId: id, date: s.today, type: key, dataUrl: full, preview, name: f.name, capturedAt: captured, location: (s.forms[id].location || '').trim(), userId: sess ? sess.user.userId : '', userName: sess ? sess.user.name : '' };
     try { await idb.put('ph:' + clientId, rec); }
     catch (e) { return this.toast(idb.isQuota(e) ? 'Phone storage full — photo NOT saved. Free up space, then take it again.' : 'Could not save the photo on this phone — try again', 'err'); }
     const old = this.state.photos[id][key];
     if (old && old.pending && old.clientId) idb.del('ph:' + old.clientId).catch(() => {});
-    const photo = { name: f.name, url: preview, time: this.now(), clientId, pending: true, uploaded: false, date: s.today, capturedAt: captured, userId: rec.userId };
+    const photo = { name: f.name, url: preview, time: this.now(), clientId, pending: true, uploaded: false, date: s.today, capturedAt: captured, userId: rec.userId, userName: rec.userName };
     this.setState(st => ({ photos: { ...st.photos, [id]: { ...st.photos[id], [key]: photo } } }), () => {
       this.persist();
       if (api.online()) this.uploadPhoto(id, key);
@@ -539,7 +588,8 @@ export const liveMethods = {
         const r = await api.call('uploadPhoto', { teamId: id, reportDate: rec.date, type: key, clientId: rec.clientId, dataUrl: rec.dataUrl,
           originalFilename: rec.name, capturedAt: rec.capturedAt, location: rec.location }, { timeout: 90000 });
         await setCur(cur => ({ name: p.name, url: cur.url, time: api.timeOf(r.photo.uploadedAt), photoId: r.photo.photoId, clientId: p.clientId, uploaded: true }));
-        idb.del('ph:' + p.clientId).catch(() => {});
+        // Uploaded, but the phone keeps its copy until a server-confirmed report uses this photo.
+        idb.put('ph:' + p.clientId, { ...rec, uploaded: true, photoId: r.photo.photoId }).catch(() => {});
         this.persist();
         this.toast((key === 'before' ? 'Before' : 'After') + ' photo uploaded to Google Drive');
         return true;
@@ -556,6 +606,26 @@ export const liveMethods = {
     })();
     this._uploading[tag] = job;
     return job;
+  },
+
+  /**
+   * A report for this team and day is confirmed by the server: the phone's copies of its uploaded photos
+   * (and of photos replaced before it was sent) are no longer needed. Photos not uploaded yet are kept.
+   */
+  async releasePhotos(teamId, date) {
+    try {
+      for (const key of await idb.keys()) {
+        if (typeof key !== 'string' || !key.startsWith('ph:')) continue;
+        const rec = await idb.get(key).catch(() => null);
+        if (rec && rec.teamId === teamId && rec.date === date && rec.uploaded) await idb.del(key);
+      }
+    } catch (e) { /* kept: tried again after the next load */ }
+  },
+  /** After a load: release local photo copies of every report the server shows as submitted. */
+  releaseSubmitted(reports) {
+    const done = (reports || []).filter(r => r.state === 'submitted');
+    if (!done.length) return;
+    (async () => { for (const r of done) await this.releasePhotos(r.teamId, r.reportDate); })();
   },
 
   /** Before a report is sent: upload that day's photos first (the server checks they are there). */
@@ -589,18 +659,18 @@ export const liveMethods = {
       for (const key of keys) {
         if (typeof key !== 'string' || !key.startsWith('ph:')) continue;
         const rec = await idb.get(key).catch(() => null);
-        if (!rec || typeof rec.dataUrl !== 'string' || this._failedPhotos[rec.clientId] || !this.mayUpload(rec)) continue;
+        if (!rec || typeof rec.dataUrl !== 'string' || rec.uploaded || this._failedPhotos[rec.clientId] || !this.mayUpload(rec)) continue;
         const cur = this.state.photos[rec.teamId] && this.state.photos[rec.teamId][rec.type];
         if (cur && cur.clientId === rec.clientId) continue;       // on screen: handled above
         try {
           await api.call('uploadPhoto', { teamId: rec.teamId, reportDate: rec.date, type: rec.type, clientId: rec.clientId, dataUrl: rec.dataUrl,
             originalFilename: rec.name, capturedAt: rec.capturedAt, location: rec.location }, { timeout: 90000 });
-          await idb.del(key);
+          await idb.put(key, { ...rec, uploaded: true });   // kept until its report is confirmed (see releasePhotos)
         } catch (e) {
           ok = false;
           if (e.auth) { this.liveError(e); break; }
           // Refused (e.g. that day is now locked): stop retrying, keep the file, and tell the admin.
-          if (!(e.offline || e.retry)) { this._failedPhotos[rec.clientId] = { date: rec.date, error: e.message.slice(0, 120) }; api.saveLocal('failedPhotos', this._failedPhotos); }
+          if (!(e.offline || e.retry)) { this._failedPhotos[rec.clientId] = { date: rec.date, error: e.message.slice(0, 120), userId: rec.userId || '' }; this.store('failedPhotos', this._failedPhotos); }
         }
       }
     } finally { this._sweeping = false; }
@@ -620,10 +690,11 @@ export const liveMethods = {
   async liveSubmitAct(id) {
     if (this._inflight) return;                      // a double tap sends once
     const key = 'act|' + id + '|' + this.state.today, cur = this._ob[key];
-    if (cur && (cur.state === 'pending' || cur.state === 'syncing')) return this.sendItem(key, true);
+    if (cur && this.mine(cur) && (cur.state === 'pending' || cur.state === 'syncing')) return this.sendItem(key, true);
+    if (cur && !this.mine(cur)) return this.queue('act', id, null);   // refuses, with the reason
     const v = this.validate(id, this.state);
     if (v.list.length) { this.up('showErr', id, () => true); this.toast(v.list.length > 1 ? `${v.list.length} items need attention` : '1 item needs attention', 'err'); setTimeout(() => this.scrollToId('act-errors'), 60); return; }
-    const attKey = 'att|' + id + '|' + this.state.today, att = this._ob[attKey];
+    const attKey = 'att|' + id + '|' + this.state.today, att0 = this._ob[attKey], att = att0 && this.mine(att0) ? att0 : null;
     if (att && att.state !== 'pending' && att.state !== 'syncing') return this.toast('Attendance was not accepted — fix it on the Attendance tab first', 'err');
     this.saveDraft(id, true);
     this._inflight = true;
@@ -680,7 +751,8 @@ export const liveMethods = {
       setTimeout(() => URL.revokeObjectURL(url), 1500);
       le.ok = true;
       this.setState({ lastExport: le });
-      this.toast(`Download requested: ${r.filename} (${r.rows} reports, ${r.from} to ${r.to})`, 'info');
+      if (r.xlsxError) this.toast(`CSV downloaded (${r.rows} reports), but the .xlsx could not be made: ${r.xlsxError}`, 'err');
+      else this.toast(`Download requested: ${r.filename} (${r.rows} reports, ${r.from} to ${r.to})`, 'info');
     } catch (e) { this.liveError(e, 'Export failed'); }
     finally { this.setState({ busy: null }); }
   },

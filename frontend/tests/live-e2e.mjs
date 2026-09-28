@@ -47,6 +47,10 @@ async function device(viewport, timezoneId = 'Asia/Manila') {
     const f = faults[body.action];
     if (f === 'fail') { delete faults[body.action]; return route.abort('failed'); }
     if (f === 'slow') await new Promise(r => setTimeout(r, 700));
+    // 'hang': the server commits but never answers (the phone's own timeout must fire).
+    if (f === 'hang') { delete faults[body.action]; B.call(body); return; }
+    // 'refuse': the server refuses a photo as not a real image.
+    if (f === 'refuse') { delete faults[body.action]; return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ ok: false, error: 'That file is not a real JPEG, PNG or WebP photo — take it again.' }) }); }
     const out = B.call(body);
     if (f === 'drop') { delete faults[body.action]; return route.abort('failed'); }
     await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(out) });
@@ -350,6 +354,27 @@ try {
   await waitText(G4.page, "Start today's report");
   await click(G4.page, "Start today's report");
   ok('after signing in again the queued change is sent, with its reason', await waitText(G4.page, 'Attendance submitted and saved', 15000) && B.env.readAll_('Attendance').find(a => a.name === 'Ivan Cabunag').status === 'Sick' && /Ivan sent home sick/.test(attUpd().reason));
+
+  // ── Epoxy 2 report: a refused required photo blocks confirmation; then a server that never answers ──
+  await G4.page.getByRole('tab', { name: /Activity/ }).click();
+  await fillForm(G4.page, 'CANDABA VIADUCT North bound');
+  await G4.page.fill('label:has-text("Actual manpower") input', '6');
+  await G4.page.fill('textarea[aria-label="Remarks"]', 'Scaffolding continues tomorrow');
+  faults.uploadPhoto = 'refuse';
+  await photoFile(G4.page, 'Upload Before Work photo', 'IMG_4001.jpg');
+  ok('refused photo marked "Refused — retake" (not retried)', await waitText(G4.page, 'Refused — retake'));
+  await click(G4.page, 'Submit report');
+  ok('failed required photo blocks confirmation: "Not accepted", nothing submitted', await waitText(G4.page, 'Report: Not accepted by the server', 15000) && (await text(G4.page)).includes('Add a Before Work photo') && report('team4').state !== 'submitted');
+  await G4.page.click('button[aria-label="Remove Before Work photo"]');
+  await photoFile(G4.page, 'Upload Before Work photo', 'IMG_4002.jpg');
+  await waitText(G4.page, 'Before photo uploaded');
+  calls.submitReport = 0;
+  faults.submitReport = 'hang';
+  await click(G4.page, 'Submit report');
+  ok('timeout: after 45 s with no answer the phone says NOT confirmed, keeps it Pending sync', await waitText(G4.page, 'did not answer in time', 60000) && (await text(G4.page)).includes('Report: Pending sync') && !(await text(G4.page)).includes('Report submitted at'));
+  ok('…the server had in fact saved it once', report('team4').state === 'submitted' && report('team4').version === '1');
+  await G4.page.getByRole('button', { name: 'Send now' }).click();
+  ok('re-send after the timeout is recognised: confirmed, still version 1 (no duplicate)', await waitText(G4.page, 'Report submitted at', 15000) && report('team4').version === '1' && calls.submitReport === 2);
 
   // ── Phone set to another time zone with a clock 3 days fast ─────────────
   const Z = await device({ width: 390, height: 844 }, 'America/Los_Angeles');

@@ -249,13 +249,13 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 Automated tests (run before every change):
 ```sh
 node google-apps-script/test/backend.test.cjs      # 151 backend checks, incl. adversarial cases
-cd frontend && npm run test:e2e                     # 90 end-to-end checks: phones + admin in real browsers
+cd frontend && npm run test:e2e                     # 96 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake
 tokens, duplicate submit, double tap, offline → reconnect, failed photo upload, edited
 localStorage, invalid dates/times/numbers, Complete without After photo, two phones editing
 the same report, CSV formula payloads, unauthorised reopen, reload/lost answer during submit,
-offline queue sent automatically on reconnect, conflict state, crew changed while a record was
+offline queue sent automatically on reconnect, a server that never answers (client timeout), a refused required photo blocking confirmation, conflict state, crew changed while a record was
 queued, expired session with work queued, phone in another time zone with a wrong clock,
 corrupted local data, disguised/oversize photo files, attendance changes without a reason,
 no demo data in the production build, and upgrading an old Sheet in place.

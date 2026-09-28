@@ -93,15 +93,16 @@ var FORMULA_FIELDS = { beforePreview: true, afterPreview: true };
 var HEADER_ALIASES = { 'Note / Reason': ['Absence Reason'], 'Not Present (status)': ['Absent (reason)'] };
 var PROTECTED_TABS = ['Users', 'AuditLog', 'Revisions', 'Sessions'];
 
-// Real crews from the prototype. setup() copies them into the Sheet once.
+// Real crews. setup() copies them into the Sheet once (only when the tabs are empty).
+// No PINs here: setup() makes random ones and prints them once.
 var SEED = [
-  ['team1', 'Bridge RM_Team 1', 'RM Team 1', 'Pijay Tanjeco', '1111', 'Locations',
+  ['team1', 'Bridge RM_Team 1', 'RM Team 1', 'Pijay Tanjeco', 'Locations',
     [['Justin Billones', 'Skilled'], ['Ignacio Alcoriza Jr.', 'Crew'], ['Alvin Angelo', 'Crew'], ['Joven Blanza', 'Crew'], ['Rocky Miranda', 'Crew'], ['Richard Candelaria', 'Crew'], ['Crisostomo Sebuc', 'Crew']]],
-  ['team2', 'Segment 10 Scupper Drain', 'Segment 10', 'Glenn Butiong', '2222', 'KM',
+  ['team2', 'Segment 10 Scupper Drain', 'Segment 10', 'Glenn Butiong', 'KM',
     [['Glen Jorick De Mesa', 'Skilled'], ['Justine Gregg Baylon', 'Skilled'], ['John Christian Bernardo', 'Crew'], ['Ian Enriquez', 'Crew'], ['Joanner Royce Quilao', 'Crew'], ['Rolando Faustino', 'Crew'], ['Richard Santiago', 'Crew'], ['Abraham Balmeo', 'Crew']]],
-  ['team3', 'Bridge Epoxy 1', 'Epoxy 1', 'Allan Miranda', '3333', 'Locations',
+  ['team3', 'Bridge Epoxy 1', 'Epoxy 1', 'Allan Miranda', 'Locations',
     [['Elmer Dordulo', 'Skilled'], ['Edwin Lozano', 'Skilled'], ['R-Jay John Aquino', 'Crew'], ['Mark Joseph De Guzman', 'Crew'], ['Edbryan Dela Cruz', 'Crew'], ['Mark Ian Dungca', 'Crew'], ['Johnry Manese', 'Crew'], ['Eroll Pangilinan', 'Crew']]],
-  ['team4', 'Bridge Epoxy 2', 'Epoxy 2', 'Gilbert Rivera', '4444', 'Locations',
+  ['team4', 'Bridge Epoxy 2', 'Epoxy 2', 'Gilbert Rivera', 'Locations',
     [['Alvin Galang', 'Skilled'], ['Ivan Cabunag', 'Crew'], ['AJ Enriquez', 'Crew'], ['Jaypee Occidental', 'Crew'], ['Edgar Ortillo', 'Crew'], ['Voltaire Rotamula', 'Crew'], ['Joshua Andrei Tayco', 'Crew']]],
 ];
 
@@ -112,10 +113,10 @@ var SEED = [
 /**
  * Creates the tabs (upgrading an older Sheet in place), fills in teams and crew when empty,
  * and gives the admin and each leadman a new random PIN. The PINs are printed in the log ONCE;
- * the Users tab only keeps a hash. `options.demoPins` (tests only) keeps the demo PINs 0000–4444.
+ * the Users tab only keeps a hash. `options.pins` (automated tests only) fixes the new PINs: admin first, then one per team.
  */
 function setup(options) {
-  var demoPins = !!(options && options.demoPins === true);
+  var fixedPins = options && Array.isArray(options.pins) && options.pins.length === SEED.length + 1 ? options.pins.map(String) : null;
   CACHE = {};
   var ss = db_(), props = PropertiesService.getScriptProperties();
   ['TOKEN_SECRET', 'PIN_SECRET', 'DEVICE_SECRET', 'AUDIT_SECRET'].forEach(function (k) {
@@ -133,13 +134,13 @@ function setup(options) {
   CACHE = {};
   var now = now_(), pins = {};
   if (readAll_('Teams').length === 0) {
-    SEED.forEach(function (t) { upsert_('Teams', t[0], { teamId: t[0], name: t[1], short: t[2], defaultUnit: t[5], active: 'Yes' }); });
+    SEED.forEach(function (t) { upsert_('Teams', t[0], { teamId: t[0], name: t[1], short: t[2], defaultUnit: t[4], active: 'Yes' }); });
   }
   if (readAll_('Users').length === 0) {
     if (legacy.length) {
       legacy.forEach(function (u) { upsert_('Users', u.userId, u, { createdAt: now, updatedAt: now }); });
     } else {
-      var fresh = demoPins ? ['0000'].concat(SEED.map(function (t) { return t[4]; })) : randomPins_(SEED.length + 1);
+      var fresh = fixedPins || randomPins_(SEED.length + 1);
       upsert_('Users', 'admin', { userId: 'admin', name: 'Operations Admin', role: 'admin', teamId: '', pin: fresh[0], active: 'Yes', createdAt: now, updatedAt: now });
       pins.admin = fresh[0];
       SEED.forEach(function (t, i) {
@@ -155,7 +156,7 @@ function setup(options) {
   normalizePins_();
   if (readAll_('Roster').length === 0) {
     SEED.forEach(function (t) {
-      [[t[3], 'Leadman']].concat(t[6]).forEach(function (m) {
+      [[t[3], 'Leadman']].concat(t[5]).forEach(function (m) {
         var id = newPersonId_(t[0], m[0]);
         upsert_('Roster', id, { personId: id, teamId: t[0], name: m[0], role: m[1], status: 'Active', createdAt: now, updatedAt: now, editedBy: 'setup' });
       });
@@ -227,6 +228,9 @@ function forgetAllPhones() {
 /** Lift a sign-in lockout early (after too many wrong PINs). */
 function clearLoginLock() { PropertiesService.getScriptProperties().deleteProperty('LOGIN_LOCKED_UNTIL'); }
 
+/** After checking the cause, clear the "audit entries could not be written" warning on the admin screen. */
+function clearAuditFailures() { PropertiesService.getScriptProperties().deleteProperty('AUDIT_FAILURES'); }
+
 /** Check the audit log has not been edited by hand. Logs the first broken row, if any. */
 function verifyAuditLog() {
   CACHE = {};
@@ -271,7 +275,12 @@ function doPost(e) {
     var sess = fn.public ? null : verify_(req.token);
     if (sess) REQ.device = sess.device;
     if (fn.admin && !isAdmin_(sess)) deny_(sess, req.action, 'admin-only action');
-    return out_(fn.run(sess, req));
+    // A retried write (same request ID from the same user) gets the first answer back and changes nothing.
+    var seen = fn.writes && sess && REQ.requestId ? 'rq:' + sess.user.userId + ':' + req.action + ':' + REQ.requestId : '';
+    if (seen) { var prev = CacheService.getScriptCache().get(seen); if (prev) { var o = JSON.parse(prev); o.replay = true; return out_(o); } }
+    var result = fn.run(sess, req);
+    if (seen && result && result.ok) { try { CacheService.getScriptCache().put(seen, JSON.stringify(result), 21600); } catch (e) {} }
+    return out_(result);
   } catch (err) {
     var msg = String(err && err.message || err);
     var o = { ok: false, error: msg.replace(/^(AUTH|CONFLICT|DENIED): /, '') };
@@ -351,7 +360,7 @@ function login_(_, req) {
   upsert_('Sessions', sid, { sessionId: sid, userId: u.userId, role: u.role, teamId: u.teamId || '', device: dk.d, createdAt: now, expiresAt: String(exp) });
   REQ.device = dk.d;
   audit_(user, user.teamId, 'login', 'session', sid, null, null, 'Signed in');
-  return { ok: true, token: signed_({ s: sid, u: u.userId, exp: exp, pv: pinTag_(u.pin) }, 'TOKEN_SECRET'), user: user, expiresAt: exp };
+  return { ok: true, token: signed_({ s: sid, u: u.userId, exp: exp, pv: pinTag_(u.pin) }, 'TOKEN_SECRET'), user: user, expiresAt: exp, serverTime: Date.now(), today: today_() };
 }
 
 function logout_(s) {
@@ -465,10 +474,14 @@ function validDate_(d) {
   return shiftDate_(d, 0) === d && d >= '2020-01-01';
 }
 
-/** Optimistic concurrency: the app sends the revision it last saw. */
-function needRev_(rep, baseRev) {
-  var cur = rep ? String(rep.rev || '0') : '0';
-  if (String(baseRev == null ? '' : baseRev) !== cur) {
+/**
+ * Optimistic concurrency: the app sends the revision it last saw. A mismatch means another device
+ * (or the admin) changed the report since; nothing is overwritten and the refusal is audited.
+ */
+function needRev_(s, rep, baseRev, action) {
+  var cur = rep ? String(rep.rev || '0') : '0', sent = String(baseRev == null ? '' : baseRev);
+  if (sent !== cur) {
+    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Refused: changed on another device');
     throw new Error('CONFLICT: This report was changed on another device. Your entries are kept on this phone — check them and submit again.');
   }
 }
@@ -491,15 +504,46 @@ function load_(s, req) {
     r.lockedForLeadman = r.reportDate < yesterday_();
     return r;
   });
+  if (!isAdmin_(s) && Array.isArray(req.outbox)) notePhoneQueue_(s, req.outbox);
   return {
-    ok: true, user: s.user, today: today_(),
+    ok: true, user: s.user, today: today_(), serverTime: Date.now(),
     teams: teams,
     roster: readAll_('Roster').filter(mine),
     attendance: readAll_('Attendance').filter(function (a) { return a.reportDate >= since && mine(a); }),
     reports: reports,
     photos: photos,
     sheetUrl: isAdmin_(s) ? db_().getUrl() : '',
+    phoneQueue: isAdmin_(s) ? phoneQueues_(teams) : {},
+    auditFailures: isAdmin_(s) ? auditFailures_() : null,
   };
+}
+
+var QUEUE_KINDS = { att: 'Attendance', act: 'Activity report', photo: 'Photo' };
+var QUEUE_STATES = { pending: 'Pending sync', syncing: 'Syncing', conflict: 'Conflict', rejected: 'Needs fixing', failed: 'Upload failed' };
+
+/**
+ * What a leadman's phone still holds unsent (it reports this each time it loads). Kept for 6 hours
+ * in the script cache so the admin can see stuck or conflicting work before it reaches the Sheet.
+ */
+function notePhoneQueue_(s, list) {
+  var items = (Array.isArray(list) ? list : []).slice(0, 20).map(function (x) {
+    x = x || {};
+    return { kind: QUEUE_KINDS[x.kind] ? x.kind : '', date: validDate_(x.date) ? x.date : '', state: QUEUE_STATES[x.state] ? x.state : '', error: String(x.error || '').slice(0, 160) };
+  }).filter(function (x) { return x.kind && x.date && x.state; });
+  var cache = CacheService.getScriptCache(), k = 'queue:' + s.user.teamId;
+  if (!items.length) { cache.remove(k); return; }
+  cache.put(k, JSON.stringify({ at: now_(), by: s.user.name, items: items }), 21600);
+}
+
+function phoneQueues_(teams) {
+  var cache = CacheService.getScriptCache(), o = {};
+  teams.forEach(function (t) { var v = cache.get('queue:' + t.teamId); if (v) { try { o[t.teamId] = JSON.parse(v); } catch (e) {} } });
+  return o;
+}
+
+function auditFailures_() {
+  var v = PropertiesService.getScriptProperties().getProperty('AUDIT_FAILURES');
+  try { return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }
 
 function leadmen_() {
@@ -561,8 +605,9 @@ function saveAttendance_(s, req) {
   if (rep && REQ.requestId && rep.lastRequestId === REQ.requestId) {
     return { ok: true, replay: true, attendanceSubmittedAt: rep.attendanceSubmittedAt, crewPresent: rep.crewPresent, rev: rep.rev, reportId: rep.reportId };
   }
-  if (rep && rep.state === 'submitted' && !isAdmin_(s)) throw new Error('Report already submitted. Tap Edit report first to change attendance.');
-  needRev_(rep, req.baseRev);
+  // Attendance is locked once the report is submitted, for everyone: reopen it (with a reason) first.
+  if (rep && rep.state === 'submitted') throw new Error('Report already submitted. Tap Edit report first to change attendance.');
+  needRev_(s, rep, req.baseRev, 'attendance');
 
   var active = readAll_('Roster').filter(function (m) { return m.teamId === teamId && m.status === 'Active'; });
   var byId = {}; active.forEach(function (m) { byId[m.personId] = m; });
@@ -582,15 +627,33 @@ function saveAttendance_(s, req) {
   if (unverified.length) return { ok: false, error: 'Mark every crew member first. Not verified: ' + unverified.join(', '), missing: ['Not verified: ' + unverified.join(', ')] };
   if (needNote.length) return { ok: false, error: 'Write a note for "Other": ' + needNote.join(', '), missing: ['Note needed: ' + needNote.join(', ')] };
 
-  rep = ensureReport_(teamId, date, s.user.name);
-  var now = now_(), by = s.user.name, changes = [], beforeRows = {};
+  var beforeRows = {};
   readAll_('Attendance').forEach(function (a) { if (a.teamId === teamId && a.reportDate === date) beforeRows[a.personId] = a; });
-  var hadAttendance = !!rep.attendanceSubmittedAt;
-  if (hadAttendance) revision_(s, rep, 'attendance before update', '');
+  var hadAttendance = !!(rep && rep.attendanceSubmittedAt);
+  var changes = [], was = {}, now_is = {};
+  rows.forEach(function (r) {
+    var old = beforeRows[r.m.personId];
+    if (hadAttendance && (!old || old.status !== r.status || old.note !== r.note)) {
+      changes.push(r.m.name + ': ' + (old ? old.status + (old.note ? ' (' + old.note + ')' : '') : 'not marked') + ' → ' + r.status + (r.note ? ' (' + r.note + ')' : ''));
+      was[r.m.name] = old ? { status: old.status, note: old.note } : null;
+      now_is[r.m.name] = { status: r.status, note: r.note };
+    }
+  });
+  // Sending the same marks again changes nothing and does not bump the revision.
+  if (hadAttendance && !changes.length) {
+    return { ok: true, unchanged: true, attendanceSubmittedAt: rep.attendanceSubmittedAt, crewPresent: rep.crewPresent, rev: rep.rev, reportId: rep.reportId };
+  }
+  var reason = String(req.reason || '').trim().slice(0, 500);
+  if (hadAttendance && reason.length < 3) {
+    return { ok: false, error: 'Give a reason for changing attendance that was already submitted.', needReason: true, missing: ['Reason for the attendance change'] };
+  }
+
+  rep = ensureReport_(teamId, date, s.user.name);
+  var now = now_(), by = s.user.name;
+  if (hadAttendance) revision_(s, rep, 'attendance before update', reason);
   var rev = String(Number(rep.rev || 0) + 1);
   rows.forEach(function (r) {
-    var k = key + '|' + r.m.personId, old = beforeRows[r.m.personId];
-    if (old && (old.status !== r.status || old.note !== r.note)) changes.push(r.m.name + ': ' + old.status + (old.note ? ' (' + old.note + ')' : '') + ' → ' + r.status + (r.note ? ' (' + r.note + ')' : ''));
+    var k = key + '|' + r.m.personId;
     upsert_('Attendance', k, {
       key: k, reportId: rep.reportId, reportDate: date, teamId: teamId, personId: r.m.personId, name: r.m.name, role: r.m.role,
       status: r.status, note: r.note, submittedAt: now, submittedBy: by, updatedAt: now, rev: rev,
@@ -602,9 +665,11 @@ function saveAttendance_(s, req) {
     leadman: leadmen_()[teamId] || rep.leadman, crewPresent: present + '/' + rows.length, absentList: absentList,
     attendanceSubmittedAt: now, updatedAt: now, editedBy: by, rev: rev, lastRequestId: REQ.requestId,
   });
+  // Audit: per person old value → new value, who (session user), when (server clock), and why.
   audit_(s.user, teamId, hadAttendance ? 'attendance updated' : 'attendance submitted', 'report', rep.reportId,
-    hadAttendance ? { crewPresent: rep.crewPresent, absent: rep.absentList } : null, { crewPresent: present + '/' + rows.length, absent: absentList },
-    changes.join('; '));
+    hadAttendance ? was : null,
+    hadAttendance ? now_is : { crewPresent: present + '/' + rows.length, notPresent: absentList },
+    hadAttendance ? reason + ' — ' + changes.join('; ') : '');
   return { ok: true, attendanceSubmittedAt: now, crewPresent: present + '/' + rows.length, rev: rev, reportId: rep.reportId };
 }
 
@@ -628,8 +693,11 @@ function uploadPhoto_(s, req) {
   var m = /^data:(image\/(jpeg|png|webp));base64,([A-Za-z0-9+\/=]+)$/i.exec(req.dataUrl || '');
   if (!m) throw new Error('That file is not a photo (JPEG, PNG or WebP only).');
   var bytes = Utilities.base64Decode(m[3]);
-  if (bytes.length > MAX_PHOTO_BYTES) throw new Error('Photo is too large.');
+  if (bytes.length > MAX_PHOTO_BYTES) throw new Error('Photo is too large (6 MB max).');
   if (bytes.length < 100) throw new Error('Photo is empty or damaged — take it again.');
+  // The declared type is only a claim: the file's own first bytes must say the same thing.
+  var kind = imageKind_(bytes);
+  if (!kind || kind !== m[2].toLowerCase()) throw new Error('That file is not a real JPEG, PNG or WebP photo — take it again.');
 
   rep = ensureReport_(teamId, date, s.user.name);
   var team = row_('Teams', teamId), now = now_();
@@ -658,6 +726,15 @@ function uploadPhoto_(s, req) {
   audit_(s.user, teamId, req.type + ' photo ' + (replaced.length ? 'replaced' : 'uploaded'), 'photo', photoId,
     replaced.length ? { photoId: replaced.join(',') } : null, { photoId: photoId, reportId: rep.reportId, bytes: bytes.length }, photo.originalFilename);
   return { ok: true, photo: photo };
+}
+
+/** 'jpeg' | 'png' | 'webp' from the file's magic bytes, or '' when it is not one of those. */
+function imageKind_(bytes) {
+  var b = function (i) { return bytes[i] & 0xFF; };
+  if (b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF) return 'jpeg';
+  if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47 && b(4) === 0x0D && b(5) === 0x0A && b(6) === 0x1A && b(7) === 0x0A) return 'png';
+  if (String.fromCharCode(b(0), b(1), b(2), b(3)) === 'RIFF' && String.fromCharCode(b(8), b(9), b(10), b(11)) === 'WEBP') return 'webp';
+  return '';
 }
 
 function removePhoto_(s, req) {
@@ -735,12 +812,19 @@ function submitReport_(s, req) {
     return { ok: true, replay: true, submittedAt: old.submittedAt, submittedBy: old.submittedBy, version: old.version, rev: old.rev, reportId: old.reportId };
   }
   if (old && old.state === 'submitted') throw new Error('Report is already submitted.');
-  needRev_(old, req.baseRev);
+  needRev_(s, old, req.baseRev, 'submit');
 
-  var present = null;
-  if (old && old.attendanceSubmittedAt) present = attendanceFor_(teamId, date).filter(function (a) { return a.status === 'Present'; }).length;
-  var v = validateReport_(f, { present: present }), clean = v.clean, errs = [];
+  var present = null, errs = [];
   if (!old || !old.attendanceSubmittedAt) errs.push('Submit attendance first (Attendance tab)');
+  else {
+    // Everyone on the crew today must have a verified status (someone added after attendance was sent counts too).
+    var att = attendanceFor_(teamId, date), marked = {};
+    att.forEach(function (a) { if (ATT_STATUSES.indexOf(a.status) >= 0) marked[a.personId] = true; });
+    var unmarked = readAll_('Roster').filter(function (m) { return m.teamId === teamId && m.status === 'Active' && !marked[m.personId]; }).map(function (m) { return m.name; });
+    if (unmarked.length) errs.push('Attendance is missing for: ' + unmarked.join(', ') + ' — update attendance first');
+    present = att.filter(function (a) { return a.status === 'Present'; }).length;
+  }
+  var v = validateReport_(f, { present: present }), clean = v.clean;
   errs = errs.concat(v.errs);
 
   // The photos must be exactly the ones this report holds on the server.
@@ -748,7 +832,9 @@ function submitReport_(s, req) {
   if (!before) errs.push('Add a Before Work photo');
   if (clean.status === 'Complete' && !after) errs.push('Add an After Work photo (required when Complete)');
   if (errs.length) return { ok: false, error: 'Cannot submit yet: ' + errs.join('; '), missing: errs };
-  if (String(req.beforePhotoId || '') !== before.photoId || String(req.afterPhotoId || '') !== (after ? after.photoId : '')) {
+  // The phone names each photo by the server ID, or (queued offline) by its own photo ID.
+  var same = function (p, id, cid) { return p ? (String(id || '') === p.photoId || (!!cid && String(cid) === p.clientId)) : !id && !cid; };
+  if (!same(before, req.beforePhotoId, req.beforeClientId) || !same(after, req.afterPhotoId, req.afterClientId)) {
     throw new Error('CONFLICT: The photos on this report changed on another device. Check the photos and submit again.');
   }
 
@@ -789,7 +875,7 @@ function reopenReport_(s, req) {
   var reason = String(req.reason || '').trim().slice(0, 500);
   if (reason.length < 3) throw new Error('Give a reason for editing the submitted report.');
   if (REQ.requestId && old.lastRequestId === REQ.requestId) return { ok: true, replay: true, rev: old.rev };
-  needRev_(old, req.baseRev);
+  needRev_(s, old, req.baseRev, 'reopen');
   revision_(s, old, 'reopened', reason);
   var rev = String(Number(old.rev || 0) + 1);
   upsert_('DailyReports', key, { state: 'draft', updatedAt: now_(), editedBy: s.user.name, rev: rev, reopenReason: reason, lastRequestId: REQ.requestId });
@@ -857,23 +943,42 @@ function exportCsv_(s, req) {
   var r = range_(req, 366), from = r.from, to = r.to;
   var photos = {};
   readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
-  var head = ['Date', 'Report ID', 'Team', 'Leadman', 'State', 'Late', 'From', 'To', 'Location', 'Activity Details', 'Status', 'Target', 'Actual', 'Unit',
+  var revCount = {};
+  readAll_('Revisions').forEach(function (v) { revCount[v.reportId] = (revCount[v.reportId] || 0) + 1; });
+  var head = ['Date', 'Report ID', 'Revision', 'Version', 'Team', 'Leadman', 'State', 'Late', 'From', 'To', 'Location', 'Activity Details', 'Status', 'Target', 'Actual', 'Unit',
     'Target Manpower', 'Actual Manpower', 'Crew Present', 'Not Present (status)', 'Equipment / Plate', 'Remarks',
-    'Before Photo', 'After Photo', 'Attendance Submitted', 'First Submitted', 'Report Submitted', 'Submitted By', 'Version'];
+    'Before Photo', 'After Photo', 'Attendance Submitted', 'First Submitted', 'Report Submitted', 'Submitted By', 'Saved Revisions', 'Last Reopen Reason'];
   var rows = readAll_('DailyReports').filter(function (x) { return x.reportDate >= from && x.reportDate <= to; })
     .sort(function (a, b) { return a.reportDate === b.reportDate ? a.teamId.localeCompare(b.teamId) : a.reportDate.localeCompare(b.reportDate); })
     .map(function (x) {
       var bp = photos[x.beforePhotoId], ap = photos[x.afterPhotoId];
-      return [x.reportDate, x.reportId, x.team, x.leadman, x.state === 'submitted' ? 'Submitted' : (x.attendanceSubmittedAt ? 'Draft (attendance only)' : 'Draft'), x.late,
+      return [x.reportDate, x.reportId, x.rev || '0', x.version || '0', x.team, x.leadman, x.state === 'submitted' ? 'Submitted' : (x.attendanceSubmittedAt ? 'Draft (attendance only)' : 'Draft'), x.late,
         x.fromTime, x.toTime, x.location, x.activityDetails, x.status, x.target, x.actual, x.unit,
         x.targetManpower, x.actualManpower, x.crewPresent, x.absentList, x.plateNumber, x.remarks,
-        bp ? bp.fileUrl : '', ap ? ap.fileUrl : '', x.attendanceSubmittedAt, x.firstSubmittedAt, x.submittedAt, x.submittedBy, x.version];
+        bp ? bp.fileUrl : '', ap ? ap.fileUrl : '', x.attendanceSubmittedAt, x.firstSubmittedAt, x.submittedAt, x.submittedBy, String(revCount[x.reportId] || 0), x.reopenReason];
     });
   var csv = [head].concat(rows).map(function (x) { return x.map(csvCell_).join(','); }).join('\r\n');
+  var name = 'NLEX_Daily_Report_' + from + '_to_' + to;
+  var xlsxUrl = exportXlsx_(name, [head].concat(rows));
   audit_(s.user, '', 'export', 'export', '', null, { from: from, to: to, rows: rows.length }, '');
-  var id = db_().getId();
-  return { ok: true, csv: csv, rows: rows.length, from: from, to: to, filename: 'NLEX_Daily_Report_' + from + '_to_' + to + '.csv',
-    xlsxUrl: 'https://docs.google.com/spreadsheets/d/' + id + '/export?format=xlsx' };
+  return { ok: true, csv: csv, rows: rows.length, from: from, to: to, filename: name + '.csv', xlsxUrl: xlsxUrl };
+}
+
+/**
+ * The same rows as the CSV, in a Google Sheet of their own (in the photo folder's "Exports"
+ * subfolder), so the .xlsx download never contains the Users, Sessions or AuditLog tabs.
+ */
+function exportXlsx_(name, grid) {
+  try {
+    var x = SpreadsheetApp.create(name), sh = x.getSheets()[0];
+    var safe = grid.map(function (r) { return r.map(safeCell_); });
+    sh.getRange(1, 1, safe.length, safe[0].length).setNumberFormats(safe.map(function (r) { return r.map(function () { return '@'; }); })).setValues(safe);
+    DriveApp.getFileById(x.getId()).moveTo(subFolder_(photoRoot_(), 'Exports'));
+    return 'https://docs.google.com/spreadsheets/d/' + x.getId() + '/export?format=xlsx';
+  } catch (e) {
+    Logger.log('xlsx export failed: ' + e);
+    return '';
+  }
 }
 
 /** Every team × day in the range: submitted / draft / missing, late, attendance and photo completeness. */
@@ -884,22 +989,28 @@ function adminReports_(s, req) {
   readAll_('Attendance').forEach(function (a) { if (a.reportDate >= r.from && a.reportDate <= r.to) { var k = a.teamId + '|' + a.reportDate; att[k] = (att[k] || 0) + 1; } });
   readAll_('Photos').forEach(function (p) { if (p.status === 'Active' && p.reportDate >= r.from && p.reportDate <= r.to) { var k = p.teamId + '|' + p.reportDate; photos[k] = (photos[k] || 0) + 1; } });
   readAll_('Revisions').forEach(function (v) { revs[v.reportId] = (revs[v.reportId] || 0) + 1; });
+  var conflicts = {};
+  readAll_('AuditLog').forEach(function (a) { if (/^CONFLICT /.test(a.action) && a.entityId) conflicts[a.entityId] = (conflicts[a.entityId] || 0) + 1; });
   var roster = {};
   readAll_('Roster').forEach(function (m) { if (m.status === 'Active') roster[m.teamId] = (roster[m.teamId] || 0) + 1; });
   var leadOf = leadmen_(), out = [];
   var teams = readAll_('Teams').filter(function (t) { return t.active !== 'No'; });
+  var queues = phoneQueues_(teams);
   for (var d = r.to; d >= r.from; d = shiftDate_(d, -1)) {
     teams.forEach(function (t) {
       var k = t.teamId + '|' + d, x = reports[k] || {};
+      var q = queues[t.teamId], onPhone = q ? q.items.filter(function (i) { return i.date === d; }) : [];
       var state = x.state === 'submitted' ? 'Submitted' : x.attendanceSubmittedAt ? 'Draft' : 'Missing';
       var overdue = state !== 'Submitted' && (d < today_() || now_().slice(11, 16) > LATE_CUTOFF);
       out.push({ reportDate: d, teamId: t.teamId, team: t.name, leadman: x.leadman || leadOf[t.teamId] || '', reportId: x.reportId || '',
         state: state, late: x.late === 'Yes' || overdue, overdue: overdue, version: x.version || '0', revisions: x.reportId ? (revs[x.reportId] || 0) : 0,
         attendanceRows: att[k] || 0, rosterSize: roster[t.teamId] || 0, crewPresent: x.crewPresent || '', photos: photos[k] || 0,
-        photosNeeded: x.status === 'Complete' ? 2 : 1, status: x.status || '', location: x.location || '', submittedAt: x.submittedAt || '', firstSubmittedAt: x.firstSubmittedAt || '' });
+        photosNeeded: x.status === 'Complete' ? 2 : 1, status: x.status || '', location: x.location || '', submittedAt: x.submittedAt || '', firstSubmittedAt: x.firstSubmittedAt || '',
+        rev: x.rev || '0', conflicts: x.reportId ? (conflicts[x.reportId] || 0) : 0, reopened: !!x.reopenReason && x.state !== 'submitted',
+        onPhone: onPhone.map(function (i) { return QUEUE_KINDS[i.kind] + ': ' + QUEUE_STATES[i.state] + (i.error ? ' (' + i.error + ')' : ''); }), onPhoneAt: onPhone.length ? q.at : '' });
     });
   }
-  return { ok: true, from: r.from, to: r.to, rows: out };
+  return { ok: true, from: r.from, to: r.to, rows: out, auditFailures: auditFailures_() };
 }
 
 function revisions_(s, req) {
@@ -1111,7 +1222,12 @@ function audit_(user, teamId, action, entity, entityId, before, after, reason) {
     sh.getRange(row, 1, 1, TABLES.AuditLog.length).setValues([TABLES.AuditLog.map(function (c) { return safeCell_(a[c[0]]); })]);
     delete CACHE.AuditLog;
   } catch (e) {
+    // Never silent: the admin screen shows how many audit entries could not be written, and the last error.
     Logger.log('audit failed: ' + e);
+    try {
+      var props = PropertiesService.getScriptProperties(), prev = auditFailures_() || { count: 0 };
+      props.setProperty('AUDIT_FAILURES', JSON.stringify({ count: prev.count + 1, last: now_(), action: action, error: String(e && e.message || e).slice(0, 200) }));
+    } catch (e2) {}
   } finally {
     if (lock) lock.releaseLock();
   }

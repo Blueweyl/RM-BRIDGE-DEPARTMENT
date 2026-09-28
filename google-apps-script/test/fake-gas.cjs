@@ -10,7 +10,7 @@ function fmtDate(d, tz, pattern) {
 
 function makeBackend(opts = {}) {
   const codePath = opts.code || path.join(__dirname, '..', 'Code.gs');
-  const sheets = {}, files = {}, props = {}, cache = {};
+  const sheets = {}, files = {}, props = {}, cache = {}, exports_ = {};
   let seq = 0;
   const clock = { offsetDays: 0 };
   const cellStr = v => (v == null ? '' : String(v));
@@ -45,7 +45,8 @@ function makeBackend(opts = {}) {
     folders[id] = f; return f; };
   const roots = {};
   const env = {
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss,
+      create: name => { const id = 'xsheet' + (++seq); const sh = new Sheet('Sheet1'); const x = exports_[id] = { id, name, sheet: sh, getId: () => id, getSheets: () => [sh] }; return x; } },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: k => (cache[k] && cache[k].exp > Date.now() ? cache[k].v : null), put: (k, v, s) => { cache[k] = { v, exp: Date.now() + s * 1000 }; }, remove: k => { delete cache[k]; } }) },
@@ -60,7 +61,8 @@ function makeBackend(opts = {}) {
     },
     DriveApp: { Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
       getFolderById: id => { if (!folders[id]) throw new Error('not found'); return folders[id]; },
-      getFoldersByName: n => ({ hasNext: () => !!roots[n], next: () => roots[n] }), createFolder: n => (roots[n] = mkFolder(n)) },
+      getFoldersByName: n => ({ hasNext: () => !!roots[n], next: () => roots[n] }), createFolder: n => (roots[n] = mkFolder(n)),
+      getFileById: id => ({ moveTo: f => { if (exports_[id]) exports_[id].folder = f; } }) },
     ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' }) },
     Logger: { log() {} }, console, Date, JSON, Math, Object, String, Number, Array, Error, RegExp, Buffer,
   };
@@ -71,6 +73,6 @@ function makeBackend(opts = {}) {
   const devices = {};
   const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: props.SETUP_KEY, deviceLabel: name }).deviceKey);
   const call = body => raw(body.action === 'login' && body.deviceKey === undefined ? { ...body, deviceKey: deviceKey(body.device || 'test') } : body);
-  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots };
+  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_ };
 }
 module.exports = { makeBackend };

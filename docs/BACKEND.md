@@ -103,25 +103,30 @@ Bridge NLEX Daily Report Photos/          (created by setup(), in the admin's Dr
 ## 4. API (Apps Script `doPost` actions)
 
 All calls are `POST` with a JSON body `{ action, token, requestId?, ... }` and return `{ ok, ... }`
-or `{ ok:false, error, auth?, missing?, conflict?, denied? }`.
-Every write takes the script lock. Writes carry `requestId` (reused on retry → the server
-returns the first answer instead of saving twice) and `baseRev` (the revision the phone last
-saw → `conflict` if another device changed the report since).
+or `{ ok:false, error, auth?, missing?, conflict?, denied?, needReason? }`.
+Every action runs `token → session → user → role → team → permission` on the server; the team,
+role, user and date the phone sends are never trusted. Every write takes the script lock.
+Writes carry `requestId`: the server keeps the answer for 6 hours per user + action + request ID
+(and on the report row as `lastRequestId`), so a retry gets the first answer back and never saves
+twice. Writes also carry `baseRev` (the revision the phone started editing from → `conflict` if
+another device changed the report since; the refusal is written to the audit log as `CONFLICT …`).
+All times stored by the server are Manila time from the server clock; `login` and `load` return
+`serverTime` so the phone can correct its own clock for display.
 
 | Action | Who | Does |
 |---|---|---|
 | `enroll {setupKey}` | phone with a valid, unexpired setup link | Returns a signed per-phone **device key**; the phone then deletes the setup key |
 | `login {pin, deviceKey}` | enrolled phone | Checks the PIN hash, creates a Sessions row, returns a signed token |
 | `logout` | signed in | Revokes the session |
-| `load {days}` | admin: all teams · leadman: own team | Teams, roster, attendance, reports, active photos; Sheet link (admin) |
-| `saveAttendance {teamId, reportDate, people[], baseRev}` | own team / admin | Every active crew member needs an explicit status; Other needs a note; unknown people refused |
-| `uploadPhoto {teamId, reportDate, type, clientId, dataUrl, capturedAt, location}` | own team / admin | Same `clientId` again → same photo back (no duplicate). Saves to Drive, links it to the reportId |
+| `load {days, outbox?}` | admin: all teams · leadman: own team | Teams, roster, attendance, reports, active photos, `serverTime`. A leadman's phone sends a summary of what it still holds unsent (`outbox`); admin gets every team's summary (`phoneQueue`), the Sheet link and any audit-write failures |
+| `saveAttendance {teamId, reportDate, people[], baseRev, reason?}` | own team / admin | Every active crew member needs an explicit status; Other needs a note; unknown people refused. Locked for everyone once the report is submitted (reopen first). Changing attendance already submitted needs a `reason` (`needReason`); the audit entry holds each person's old and new status. Sending the same marks again → `unchanged`, no new revision |
+| `uploadPhoto {teamId, reportDate, type, clientId, dataUrl, capturedAt, location}` | own team / admin | JPEG/PNG/WebP only, checked from the file's own bytes (not just the declared type), 6 MB max. Same `clientId` again → same photo back (no duplicate). Saves to Drive, links it to the reportId |
 | `removePhoto {teamId, reportDate, photoId}` | own team / admin | The photo must belong to that report; marked Removed (file kept) |
-| `submitReport {teamId, reportDate, report, baseRev, beforePhotoId, afterPhotoId}` | own team / admin | Re-checks every rule (below), photo IDs must be the report's active ones, version+1, revision snapshot, audit before/after |
+| `submitReport {teamId, reportDate, report, baseRev, beforePhotoId/beforeClientId, afterPhotoId/afterClientId}` | own team / admin | Re-checks every rule (below); the photos named (server ID, or the phone's own photo ID for a report queued offline) must be the report's active ones; version+1, revision snapshot, audit before/after |
 | `reopenReport {teamId, reportDate, reason, baseRev}` | own team (today/yesterday) / admin | Reason required; snapshot of the submitted version kept |
 | `addMember / archiveMember / restoreMember` | admin | Roster changes (the leadman row cannot be archived) |
-| `exportCsv {from, to}` | admin | CSV for up to 366 days, formula-safe cells, plus an `.xlsx` link |
-| `adminReports {from, to}` | admin | Every team × day: submitted/draft/missing, late/overdue, attendance and photo completeness, revision count |
+| `exportCsv {from, to}` | admin | CSV for up to 366 days with the stable **Report ID, Revision and Version** on every row, formula-safe cells. The same rows are written to a new Sheet in the photo folder's `Exports` subfolder for the `.xlsx` link (so the .xlsx never contains Users, Sessions or AuditLog) |
+| `adminReports {from, to}` | admin | Every team × day: submitted/draft/missing, late/overdue, attendance and photo completeness, revision number and count, refused conflicting writes, reopened-not-resubmitted, and work still on the phone (pending, conflict, refused, failed upload) |
 | `revisions {reportId}` / `auditLog {from, to, teamId}` | admin | Revision history of one report / audit log viewer |
 
 **Report rules enforced by the server** (the phone shows the same list before sending):
@@ -129,11 +134,13 @@ valid `HH:mm` times with From before To; location, details, plate required (leng
 status Ongoing/Complete and unit KM/Locations only; target and actual numbers 0–100 (whole
 numbers for Locations); manpower whole numbers 1–60; remarks required when the work is
 Ongoing, actual is below target, or actual manpower is above the Present count; Before photo
-always; After photo when Complete; attendance submitted first.
+always; After photo when Complete; attendance submitted first, covering everyone on the crew
+that day (someone added after attendance was sent must be marked before the report goes in).
 
 Maintenance functions to run from the Apps Script editor: `setup()` (also upgrades an older
 Sheet), `showSetupLink()`, `newSetupKey()`, `signOutEveryone()`, `forgetAllPhones()`,
-`clearLoginLock()`, `verifyAuditLog()`.
+`clearLoginLock()`, `verifyAuditLog()`, `clearAuditFailures()`. If an audit entry ever cannot be
+written, the admin screen says so (count, time, error) until `clearAuditFailures()` is run.
 
 ## 5. Sign-in and roles
 
@@ -202,32 +209,56 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 | `frontend/src/main.jsx` | Bundled fonts (work offline); setup-link capture |
 | `frontend/vite.config.js` | PWA: installable, all app files cached for offline use; backend calls never cached |
 
+**Record states in live mode** (attendance and activity report, each per team per day)
+
+| State | Meaning | Shown as |
+|---|---|---|
+| Draft | Edited on the phone, not submitted | "Saved on this phone" line |
+| Pending sync | Submitted on the phone; saved in its outbox (localStorage) with a fixed request ID; not confirmed by the server | Orange **Pending sync** box + header chip; fields locked; **Send now** / **Edit before sending** (only if never sent) |
+| Syncing | Being sent | "Syncing…" |
+| Server confirmed | The server answered OK | Green "✓ … submitted at 3:42 PM · confirmed by server" |
+| Conflict | The server refused: another device changed the report after this phone started editing | Red **Conflict — NOT saved** box + header chip; the phone's entries are kept; submitting again after seeing the server copy is a deliberate override |
+| Not accepted | The server refused for another reason (validation, crew changed, report already submitted…) | Red box with the server's message; entries kept |
+
 **Offline rules in live mode**
 - With no signal the app shows a banner. The leadman keeps working: form fields and
   attendance marks autosave on the phone (localStorage, small). Photos are stored in
-  **IndexedDB** (full size, with a watermarked evidence copy: type, team, date/time, leadman,
+  **IndexedDB** (full size, with a watermarked evidence copy: type, team, date/time (Manila), leadman,
   location) and marked **Not uploaded yet**. A storage-full error is shown, never ignored.
+- **Submit with no signal** puts the record in **Pending sync**. It is re-sent by itself when
+  signal returns, every minute, and after the next sign-in — attendance before its report,
+  that day's photos before the report. A re-send reuses the request ID, so it is never saved twice.
 - `navigator.onLine` is only a hint. Any call that does not come back with a proper answer
-  counts as *not confirmed*: the data stays on the phone and the screen says so.
-- **Submit** needs a server confirmation. If the answer is lost (signal drops, app killed), the
-  phone remembers the request ID; the next Submit re-sends it and the server returns the first
-  result instead of saving twice. After a reload the phone shows what the server has.
-- Photos upload by themselves when signal returns, every minute after a failure, and
-  before submit. Photos from an earlier day still upload for their own day.
+  counts as *not confirmed*: the record stays Pending sync and the screen says so.
+- Queued records and photos belong to the person who took/queued them: they are only ever
+  sent with that person's sign-in (never with someone else's, e.g. the admin on the same phone).
+- A photo the server refuses (not a real image, day locked…) is marked **Refused — retake** and not
+  retried; the report cannot be confirmed without its required photos.
+- An expired or revoked session sends the phone back to the PIN screen; queued work is kept and
+  sent after signing in again.
+- Each phone tells the server, when it loads, what it still holds unsent. The admin sees
+  "On the phone: …" in **Needs attention** and **On phone, not synced** in the report overview.
+- Dates and times shown are **Manila time** from the server clock, whatever the phone's time zone
+  or clock says. Audit times are always the server's.
+- Saved data that is damaged or hand-edited is checked before use: the app still opens, says so,
+  and loads the server copy. A crash shows a Reload screen instead of a blank page.
 - The first sign-in needs signal. After that the app opens offline and stays signed in.
 
 ## 10. Testing checklist
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 126 backend checks, incl. adversarial cases
-cd frontend && npm run test:e2e                     # 70 end-to-end checks: phones + admin in real browsers
+node google-apps-script/test/backend.test.cjs      # 151 backend checks, incl. adversarial cases
+cd frontend && npm run test:e2e                     # 90 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake
 tokens, duplicate submit, double tap, offline → reconnect, failed photo upload, edited
 localStorage, invalid dates/times/numbers, Complete without After photo, two phones editing
 the same report, CSV formula payloads, unauthorised reopen, reload/lost answer during submit,
-and upgrading an old Sheet in place.
+offline queue sent automatically on reconnect, conflict state, crew changed while a record was
+queued, expired session with work queued, phone in another time zone with a wrong clock,
+corrupted local data, disguised/oversize photo files, attendance changes without a reason,
+no demo data in the production build, and upgrading an old Sheet in place.
 
 **Leadman (Android/iPhone, mobile data)**
 - [ ] Open the setup link → PIN screen, no "Prototype only" bar, no Demo PINs box.
@@ -237,7 +268,8 @@ and upgrading an old Sheet in place.
 - [ ] **Take photo** opens the camera; **or choose from gallery** opens the gallery. The file in
       Drive has the watermark band at the bottom.
 - [ ] Complete without an After photo → blocked. Ongoing without remarks → blocked.
-- [ ] Airplane mode → "No signal" banner. Submit → "NOT submitted". The Sheet is unchanged.
+- [ ] Airplane mode → "No signal" banner. Submit → **Pending sync** (not "Submitted"). The Sheet is unchanged.
+      Turn airplane mode off → it sends by itself and shows "confirmed by server".
 - [ ] Take a photo in airplane mode → "Not uploaded yet". Turn data on → it uploads by itself.
 - [ ] Submit with signal → "Report submitted at …", fields locked.
 - [ ] Edit report → asks for a reason → unlocks. Resubmit → version 2; Revisions and AuditLog tabs show it.

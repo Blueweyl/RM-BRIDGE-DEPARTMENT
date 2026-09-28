@@ -6,11 +6,13 @@ const { makeBackend } = require('./fake-gas.cjs');
 
 let failed = 0;
 const ok = (name, cond, detail) => { if (!cond) failed++; console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (detail !== undefined && !cond ? '  [' + detail + ']' : '')); };
-const img = 'data:image/jpeg;base64,' + Buffer.from('fake-jpeg-bytes'.repeat(20)).toString('base64');
+const jpegBytes = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.from('fake-jpeg-bytes'.repeat(20))]);
+const img = 'data:image/jpeg;base64,' + jpegBytes.toString('base64');
 const uid = () => crypto.randomUUID();
+const DEMO_PINS = ['0000', '1111', '2222', '3333', '4444'];   // fixed PINs for tests only (admin, team1..team4)
 
 const B = makeBackend();
-B.env.setup({ demoPins: true }); B.env.setup({ demoPins: true });
+B.env.setup({ pins: DEMO_PINS }); B.env.setup({ pins: DEMO_PINS });
 const call = B.call;
 const today = B.env.today_(), yesterday = B.env.yesterday_();
 
@@ -95,8 +97,32 @@ ok('[11] stale revision refused (another device saved first)', call({ action: 's
 ok('[9] future date refused', /future/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2099-01-01', people, baseRev: '0' }).error));
 ok('[9] impossible date refused', /bad date/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2026-02-30', people, baseRev: '0' }).error));
 ok('[9] old date locked for leadman', /locked/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: B.env.shiftDate_(today, -3), people, baseRev: '0' }).error));
+ok('[11] conflict is written to the audit log', B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT attendance' && a.entityId === reportId));
+const rev1 = () => B.env.row_('DailyReports', 'team2|' + today).rev;
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: rev1(), requestId: uid() });
+ok('sending the same marks again changes nothing (no new revision)', r.ok && r.unchanged && rev1() === '1');
+const ian = L.roster.find(m => m.name === 'Ian Enriquez').personId;
+const people2 = people.map(p => p.personId === ian ? { ...p, status: 'Sick' } : p);
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people: people2, baseRev: rev1(), requestId: uid() });
+ok('changing submitted attendance needs a reason', !r.ok && r.needReason && rev1() === '1', JSON.stringify(r));
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people: people2, baseRev: rev1(), requestId: uid(), reason: 'Ian went home sick at 9am' });
+const attAudit = B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
+ok('attendance change audited: old value, new value, user, server time, reason', r.ok && rev1() === '2' && attAudit.user === 'Glenn Butiong' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(attAudit.at)
+  && JSON.parse(attAudit.before)['Ian Enriquez'].status === 'Present' && JSON.parse(attAudit.after)['Ian Enriquez'].status === 'Sick' && /Ian went home sick/.test(attAudit.reason), attAudit && JSON.stringify(attAudit));
+ok('previous attendance kept as a revision', B.env.readAll_('Revisions').some(v => v.kind === 'attendance before update' && JSON.parse(v.snapshot).attendance.find(a => a.name === 'Ian Enriquez').status === 'Present'));
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: rev1(), requestId: uid(), reason: 'Ian came back after lunch' });
+ok('attendance changed back (with reason)', r.ok && rev1() === '3');
+// Request IDs are remembered per user: the answer to a retry is the first answer, even after later changes.
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: attReq });
+ok('[4][14] old request replayed after later changes → first answer back, nothing written', r.ok && r.replay && r.rev === '1' && rev1() === '3', JSON.stringify(r));
+r = call({ action: 'saveAttendance', token: T.t3, teamId: 'team3', reportDate: today, people: [], baseRev: '0', requestId: attReq });
+ok('another user cannot pick up someone else\'s cached answer', !r.replay && !r.ok);
 
 // ── Photos ──────────────────────────────────────────────────────────────
+const html = Buffer.from('<html><script>alert(1)</script></html>'.repeat(5)).toString('base64');
+ok('HTML disguised as a JPEG refused (file bytes checked)', /not a real JPEG/.test(call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: 'data:image/jpeg;base64,' + html, clientId: uid() }).error || ''));
+ok('JPEG declared as PNG refused', /not a real/.test(call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: 'data:image/png;base64,' + jpegBytes.toString('base64'), clientId: uid() }).error || ''));
+ok('oversize photo refused', /too large/.test(call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: 'data:image/jpeg;base64,' + Buffer.concat([jpegBytes, Buffer.alloc(6.5 * 1024 * 1024)]).toString('base64'), clientId: uid() }).error || ''));
 ok('non-image upload refused', !call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: 'data:text/html;base64,PGgxPg==', clientId: uid() }).ok);
 ok('upload without client photo ID refused', !call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: img }).ok);
 const cBefore = uid();
@@ -141,6 +167,7 @@ ok('[4] duplicate submit with same request → replay, still version 1', submit(
 ok('[5] second submit (double-click, new request) refused', /already submitted/.test(submit(form, { afterPhotoId: afterId }).error));
 ok('photo change refused after submit', /Edit report/.test(call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, clientId: uid() }).error));
 ok('attendance change refused after submit', /Edit report/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: repAfter.rev }).error));
+ok('attendance lock applies to admin too (reopen first)', /Edit report/.test(call({ action: 'saveAttendance', token: T.admin, teamId: 'team2', reportDate: today, people, baseRev: repAfter.rev, reason: 'fix' }).error));
 ok('revision snapshot stored on submit', B.env.readAll_('Revisions').some(v => v.reportId === reportId && v.kind === 'submitted' && JSON.parse(v.snapshot).attendance.length === 9));
 ok('report is not late (submitted before cutoff or in test clock window)', ['Yes', 'No'].includes(repAfter.late));
 
@@ -178,6 +205,42 @@ r = call({ action: 'uploadPhoto', token: T.t3, teamId: 'team3', reportDate: toda
 ok('leadman cannot remove another team\'s photo by ID', call({ action: 'removePhoto', token: T.t3, teamId: 'team3', reportDate: today, photoId: beforeId }).denied === true);
 ok('leadman removes own photo', call({ action: 'removePhoto', token: T.t3, teamId: 'team3', reportDate: today, photoId: r.photo.photoId }).ok && B.env.row_('Photos', r.photo.photoId).status === 'Removed');
 
+// ── Report needs attendance for today's whole crew; queued phones name photos by their own ID ──
+const newbie = call({ action: 'addMember', token: T.admin, teamId: 'team3', name: 'Pedro Penduko' }).personId;
+const cB3 = uid();
+call({ action: 'uploadPhoto', token: T.t3, teamId: 'team3', reportDate: today, type: 'before', dataUrl: img, clientId: cB3 });
+const form3 = { fromTime: '07:00', toTime: '16:00', location: 'CANDABA VIADUCT', activityDetails: 'Epoxy injection', status: 'Ongoing', target: '3', actual: '2', unit: 'Locations', targetManpower: '9', actualManpower: '9', plateNumber: 'NCG 5500', remarks: 'Pier 112 left' };
+const rev3 = () => B.env.row_('DailyReports', 'team3|' + today).rev;
+r = call({ action: 'submitReport', token: T.t3, teamId: 'team3', reportDate: today, report: form3, baseRev: rev3(), beforeClientId: cB3, requestId: uid() });
+ok('[9] crew added after attendance: report refused until attendance covers them', !r.ok && r.missing.some(m => /Attendance is missing for: Pedro Penduko/.test(m)), JSON.stringify(r));
+const t3b = call({ action: 'load', token: T.t3 });
+r = call({ action: 'saveAttendance', token: T.t3, teamId: 'team3', reportDate: today, people: allPresent(t3b.roster), baseRev: rev3(), requestId: uid(), reason: 'New crew member joined' });
+ok('attendance updated to include the new member', r.ok && r.crewPresent === '10/10', JSON.stringify(r));
+r = call({ action: 'submitReport', token: T.t3, teamId: 'team3', reportDate: today, report: form3, baseRev: rev3(), beforeClientId: cB3, requestId: uid() });
+ok('report sent from the offline queue names its photo by the phone\'s photo ID', r.ok && B.env.row_('DailyReports', 'team3|' + today).beforePhotoId === B.env.readAll_('Photos').find(p => p.clientId === cB3).photoId, JSON.stringify(r));
+call({ action: 'archiveMember', token: T.admin, personId: newbie });
+
+// ── Admin sees what phones still hold, conflicts, audit problems; server clock ──
+r = call({ action: 'load', token: T.t3, outbox: [{ kind: 'act', date: today, state: 'conflict', error: 'Changed on another device' }, { kind: 'bogus', date: today, state: 'pending' }, { kind: 'photo', date: 'x', state: 'failed' }] });
+ok('load returns the server clock and Manila date', r.ok && Math.abs(r.serverTime - Date.now()) < 5000 && r.today === today);
+let AQ = call({ action: 'load', token: T.admin });
+ok('admin sees a phone\'s unsent/conflicting work (bad entries dropped)', AQ.phoneQueue.team3 && AQ.phoneQueue.team3.items.length === 1 && AQ.phoneQueue.team3.items[0].state === 'conflict' && AQ.phoneQueue.team3.by === 'Allan Miranda', JSON.stringify(AQ.phoneQueue));
+ok('a leadman never sees other phones\' queues', Object.keys(call({ action: 'load', token: T.t3 }).phoneQueue).length === 0);
+r = call({ action: 'adminReports', token: T.admin, from: today, to: today });
+ok('overview flags pending/conflicting work on the phone', /Activity report: Conflict/.test(r.rows.find(x => x.teamId === 'team3').onPhone.join()), JSON.stringify(r.rows.find(x => x.teamId === 'team3')));
+ok('overview counts refused conflicting writes per report', r.rows.find(x => x.teamId === 'team2').conflicts >= 1);
+call({ action: 'load', token: T.t3, outbox: [] });
+ok('queue cleared once the phone has nothing left', !call({ action: 'load', token: T.admin }).phoneQueue.team3);
+const auditTab = B.sheets.AuditLog; delete B.sheets.AuditLog;
+call({ action: 'removePhoto', token: T.t3, teamId: 'team3', reportDate: today, photoId: 'nope' });
+call({ action: 'load', token: T.t3, outbox: [] });
+B.env.audit_({ name: 'x', role: 'test' }, '', 'test entry', '', '', null, null, '');
+B.sheets.AuditLog = auditTab;
+AQ = call({ action: 'load', token: T.admin });
+ok('an audit entry that cannot be written is never silent (admin warned)', AQ.auditFailures && AQ.auditFailures.count >= 1 && AQ.auditFailures.action === 'test entry', JSON.stringify(AQ.auditFailures));
+B.env.clearAuditFailures();
+ok('no demo PINs in the backend code', !/'(0000|1111|2222|3333|4444)'/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'Code.gs'), 'utf8')));
+
 // ── Roster ──────────────────────────────────────────────────────────────
 r = call({ action: 'addMember', token: T.admin, teamId: 'team2', name: '  Juan  Dela Cruz ' });
 ok('admin adds crew', r.ok && r.personId === 'team2-juan-dela-cruz');
@@ -190,14 +253,17 @@ ok('restore', call({ action: 'restoreMember', token: T.admin, personId: r.person
 // ── [12] Export ─────────────────────────────────────────────────────────
 r = call({ action: 'exportCsv', token: T.admin, from: yesterday, to: today });
 const lines = r.csv.split('\r\n');
-ok('CSV export for a chosen date range', r.ok && r.rows === 2 && r.from === yesterday && lines[0].startsWith('Date,Report ID,Team') && r.csv.includes('Segment 10 Scupper Drain') && r.csv.includes('drive.google.com/file/d/'), r.rows);
+ok('CSV/XLSX carry the stable report ID + revision number', lines[0].startsWith('Date,Report ID,Revision,Version,Team') && lines.some(l => l.includes(reportId + ',' + B.env.row_('DailyReports', 'team2|' + today).rev + ',2,')), lines[0]);
+const xl = Object.values(B.exports).pop();
+ok('.xlsx is a separate file with only the export rows (no Users/Sessions/Audit tabs)', r.xlsxUrl.includes(xl.id) && xl.sheet.data.length === 3 && xl.sheet.data[0][1] === 'Report ID' && xl.folder && xl.folder.name === 'Exports');
+ok('CSV export for a chosen date range', r.ok && r.rows === 2 && r.from === yesterday && r.csv.includes('Segment 10 Scupper Drain') && r.csv.includes('drive.google.com/file/d/'), r.rows);
 ok('[12] CSV neutralises = formulas', r.csv.includes(`"'=HYPERLINK(""x"")"`));
 B.env.upsert_('DailyReports', 'team2|' + today, { remarks: '+SUM(1)', location: '@evil', activityDetails: '-2+3' });
 const esc = call({ action: 'exportCsv', token: T.admin, from: today, to: today }).csv;
 ok('[12] CSV neutralises + @ - payloads', esc.includes("'+SUM(1)") && esc.includes("'@evil") && esc.includes("'-2+3"));
 ok('[9] export range backwards refused', /on or before/.test(call({ action: 'exportCsv', token: T.admin, from: today, to: yesterday }).error));
 ok('[9] export range too long refused', /at most/.test(call({ action: 'exportCsv', token: T.admin, from: '2020-01-01', to: today }).error));
-ok('xlsx link', r.xlsxUrl.endsWith('/export?format=xlsx'));
+ok('xlsx link', r.xlsxUrl.endsWith('/export?format=xlsx') && !r.xlsxUrl.includes('SHEETID'));
 
 // ── Admin overview, revisions, audit log ────────────────────────────────
 r = call({ action: 'adminReports', token: T.admin, from: yesterday, to: today });
@@ -227,7 +293,7 @@ B.env.signOutEveryone();
 ok('signOutEveryone invalidates admin', call({ action: 'load', token: T.admin }).auth === true);
 
 // ── Global lockout ──────────────────────────────────────────────────────
-const G = makeBackend(); G.env.setup({ demoPins: true });
+const G = makeBackend(); G.env.setup({ pins: DEMO_PINS });
 for (let i = 0; i < 30; i++) G.raw({ action: 'enroll', setupKey: 'guess' + i });
 ok('wrong setup keys do not lock PIN sign-in for everyone', G.call({ action: 'login', pin: '0000', device: 'fresh0' }).ok);
 for (let i = 0; i < 30; i++) G.raw({ action: 'enroll', setupKey: 'guess' + i });
@@ -243,7 +309,7 @@ ok('expired setup link cannot enrol new phones', /expired/.test(G.raw({ action: 
 
 // ── Upgrade an old (v1) Sheet in place ──────────────────────────────────
 const M = makeBackend({ code: require('path').join(__dirname, 'fixtures', 'Code-v1.gs') });
-M.env.setup({ demoPins: true });
+M.env.setup({ demoPins: true });   // the old v1 code has its own test option
 const v1 = M.call({ action: 'login', pin: '2222', device: 'old', setupKey: M.props.SETUP_KEY });
 M.env.CACHE = {};
 const v1l = JSON.parse(M.env.doPost({ postData: { contents: JSON.stringify({ action: 'load', token: v1.token }) } }).s);
@@ -252,7 +318,7 @@ JSON.parse(M.env.doPost({ postData: { contents: JSON.stringify({ action: 'saveAt
 // Swap in the new code on the same Sheet and run setup() again.
 const vm = require('vm'), fs = require('fs');
 vm.runInContext(fs.readFileSync(require('path').join(__dirname, '..', 'Code.gs'), 'utf8'), M.env);
-M.env.setup({ demoPins: true });
+M.env.setup({ pins: DEMO_PINS });
 ok('upgrade: Reports tab renamed to DailyReports, old Audit kept', !!M.sheets.DailyReports && !M.sheets.Reports && !!M.sheets['Audit (v1)']);
 ok('upgrade: PINs moved from Teams to Users (hashed), Teams has no admin row', M.env.readAll_('Users').length === 5 && M.env.readAll_('Users').every(u => /^h:/.test(u.pin)) && !M.env.row_('Teams', 'admin'));
 ok('upgrade: old attendance reason kept as note', M.env.readAll_('Attendance').find(a => a.name === 'Abraham Balmeo').note === 'Sick');

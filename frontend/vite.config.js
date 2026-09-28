@@ -3,8 +3,11 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Relative base so the built site works from any folder or static host (e.g. GitHub Pages).
-export default defineConfig({
+// __DEMO__ is a build-time constant: the demo (fixed PINs, sample crews) is only compiled into
+// `npm run dev` and `npm run build:demo`. The production build (`npm run build`) does not contain it.
+export default defineConfig(({ command, mode }) => ({
   base: './',
+  define: { __DEMO__: JSON.stringify(command === 'serve' || mode === 'demo') },
   plugins: [
     react(),
     // Installable app with every file cached, so it opens with no signal.
@@ -33,4 +36,4 @@ export default defineConfig({
       },
     }),
   ],
-});
+}));

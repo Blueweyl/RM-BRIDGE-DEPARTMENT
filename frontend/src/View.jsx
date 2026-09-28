@@ -24,6 +24,28 @@ function Step({ n, title, extra }) {
   );
 }
 
+const TONE = {
+  warn: 'background:#FDEBD3;border:1px solid #F3C98F;color:#6B3A00;',
+  info: 'background:#E3E9F2;border:1px solid #C5D2E2;color:#2B4A73;',
+  err: 'background:#FBE0DD;border:1px solid #EDB3AC;color:#7E1C13;',
+};
+
+/** Where a record stands: Pending sync / Syncing / Conflict / Not accepted (server confirmed shows as the green banner). */
+function SyncBox({ box }) {
+  if (!box) return null;
+  return (
+    <div role="status" aria-live="polite" style={css(TONE[box.tone] + 'border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;')}>
+      <span style={css('font-weight:800;font-size:15px;')}>{box.title}</span>
+      <span style={css('font-size:14px;overflow-wrap:anywhere;')}>{box.text}</span>
+      {box.actions && box.actions.length > 0 && (
+        <div style={css('display:flex;gap:8px;flex-wrap:wrap;')}>
+          {box.actions.map(a => <button key={a.label} onClick={a.go} style={css('min-height:44px;background:#FFFFFF;border:1.5px solid #0F2540;color:#0F2540;border-radius:8px;padding:0 14px;font-size:14px;font-weight:700;cursor:pointer;')}>{a.label}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PrototypeNav({ v }) {
   return (
     <nav aria-label="Prototype screen jumper — not part of the real app" style={css('position:sticky;top:0;z-index:60;height:52px;background:#0A1B30;display:flex;align-items:center;gap:6px;padding:0 12px;overflow-x:auto;border-bottom:2px dashed #F2A65A;')}>
@@ -88,7 +110,7 @@ function Login({ v }) {
           )}
         </div>
 
-        {login.showDemoPins && (
+        {/* global __DEMO__ */ __DEMO__ && login.showDemoPins && (
           <div style={css('background:#1B3A63;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;')}>
             <div style={css("font-family:'JetBrains Mono',monospace;font-size:10px;color:#AFC0D6;letter-spacing:1px;text-transform:uppercase;")}>Demo PINs</div>
             <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;color:#FFFFFF;')}>
@@ -126,7 +148,7 @@ function Admin({ v }) {
             <button type="button" disabled aria-disabled="true" aria-label="Import Excel, coming soon" title="Coming soon" style={css("white-space:nowrap;min-height:44px;background:transparent;border:1.5px dashed #5E7593;color:#AFC0D6;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:not-allowed;")}>Import Excel · Coming soon</button>
           )}
           <button onClick={admin.onExport} aria-label="Download report as CSV file for Excel" style={css("white-space:nowrap;min-height:44px;background:#E8760F;border:none;color:#FFFFFF;font-family:'Archivo',sans-serif;font-weight:700;font-size:14px;padding:0 16px;border-radius:8px;cursor:pointer;")}>{admin.exportLabel}</button>
-          {!admin.live && <button onClick={admin.resetDemo} style={css('white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Reset demo data</button>}
+          {admin.showReset && <button onClick={admin.resetDemo} style={css('white-space:nowrap;min-height:44px;background:transparent;border:1.5px solid #5E7593;color:#D5DEEA;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Reset demo data</button>}
           <button onClick={v.logout} style={css('white-space:nowrap;min-height:44px;background:#1B3A63;border:none;color:#FFFFFF;font-weight:700;font-size:14px;padding:0 14px;border-radius:8px;cursor:pointer;')}>Log out</button>
         </div>
       </div>
@@ -154,13 +176,15 @@ function Admin({ v }) {
         </div>
         <div style={css(KPI_CARD)}>
           <div style={css(KPI_LABEL)}>Active crews</div>
-          <div style={css('display:flex;align-items:baseline;gap:8px;')}><span style={css(KPI_NUM)}>{kpi.active}</span><span style={css(KPI_SUB)}>of 4 teams</span></div>
+          <div style={css('display:flex;align-items:baseline;gap:8px;')}><span style={css(KPI_NUM)}>{kpi.active}</span><span style={css(KPI_SUB)}>of {kpi.teamCount} teams</span></div>
         </div>
         <div style={css(kpi.pendingCard)}>
           <div style={css('font-size:12px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#8A4B00;')}>Pending submissions</div>
           <div style={css('display:flex;align-items:baseline;gap:8px;')}><span style={css(KPI_NUM + 'color:#0F2540;')}>{kpi.pending}</span><span style={css('font-size:15px;color:#6B3A00;font-weight:600;')}>need follow-up</span></div>
         </div>
       </div>
+
+      {admin.auditWarn && <div role="alert" style={css(TONE.err + 'border-radius:12px;padding:12px 14px;font-weight:700;font-size:14px;')}>{admin.auditWarn}</div>}
 
       {admin.hasPending && (
         <div style={css('background:#FFFFFF;border:1px solid #DDE2E8;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;')}>
@@ -179,7 +203,7 @@ function Admin({ v }) {
         </div>
       )}
       {admin.allDone && (
-        <div style={css('background:#DDF2E6;color:#17693F;border-radius:12px;padding:14px 16px;font-weight:700;font-size:15px;')}>✓ All 4 teams have submitted attendance and activity reports today.</div>
+        <div style={css('background:#DDF2E6;color:#17693F;border-radius:12px;padding:14px 16px;font-weight:700;font-size:15px;')}>✓ All {kpi.teamCount} teams have submitted attendance and activity reports today.</div>
       )}
 
       <div style={css('display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;')}>
@@ -287,7 +311,7 @@ function AdminTools({ t }) {
                 <div role="row" key={r.key} style={css(`display:grid;grid-template-columns:120px 200px 110px minmax(160px,1fr) 190px 80px 70px 120px;align-items:center;border-top:1px solid #E7EAEF;background:${i % 2 ? '#F9FAFB' : '#FFFFFF'};`)}>
                   <div style={css(CELL + 'font-weight:700;')}>{r.date}</div>
                   <div style={css(CELL + 'display:flex;flex-direction:column;')}><b>{r.team}</b><span style={css('color:#5B6472;')}>{r.leadman}</span></div>
-                  <div style={css(CELL + 'display:flex;flex-direction:column;gap:4px;align-items:flex-start;')}><span style={css(r.stateStyle)}>{r.state}</span>{r.late && <span style={css(r.lateStyle)}>{r.lateLabel}</span>}</div>
+                  <div style={css(CELL + 'display:flex;flex-direction:column;gap:4px;align-items:flex-start;')}><span style={css(r.stateStyle)}>{r.state}</span>{r.late && <span style={css(r.lateStyle)}>{r.lateLabel}</span>}{r.flags.map(f => <span key={f.label} title={f.title} style={css(f.style)}>{f.label}</span>)}</div>
                   <div style={css(CELL)}>{r.location}</div>
                   <div style={css(CELL + (r.attOk ? '' : 'color:#A8261B;font-weight:700;'))}>{r.attendance}</div>
                   <div style={css(CELL + (r.photosOk ? '' : 'color:#A8261B;font-weight:700;'))}>{r.photos}</div>
@@ -479,6 +503,7 @@ function ActivityTab({ cur }) {
         </fieldset>
       </div>
       <div style={css('position:sticky;bottom:0;z-index:30;background:#FFFFFF;border-top:1px solid #DDE2E8;padding:10px 14px 12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -6px 18px rgba(15,37,64,0.08);')}>
+        <SyncBox box={cur.actSyncBox} />
         {cur.actOpen && (
           <>
             <div role="status" aria-live="polite" style={css(cur.saveLineStyle)}>{cur.saveLine}</div>
@@ -545,7 +570,8 @@ function AttendanceTab({ cur }) {
           ))}
         </div>
       </div>
-      <div style={css('position:sticky;bottom:0;z-index:30;background:#FFFFFF;border-top:1px solid #DDE2E8;padding:12px 14px;box-shadow:0 -6px 18px rgba(15,37,64,0.08);')}>
+      <div style={css('position:sticky;bottom:0;z-index:30;background:#FFFFFF;border-top:1px solid #DDE2E8;padding:12px 14px;box-shadow:0 -6px 18px rgba(15,37,64,0.08);display:flex;flex-direction:column;gap:8px;')}>
+        <SyncBox box={cur.attSyncBox} />
         <button onClick={cur.submitAtt} disabled={cur.attDisabled} aria-disabled={cur.attDisabled} style={css("width:100%;min-height:56px;border:none;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;" + (cur.attDisabled ? 'background:#C9D1DB;color:#33404F;cursor:not-allowed;' : 'background:#E8760F;color:#FFFFFF;cursor:pointer;'))}>{cur.attBtn}</button>
       </div>
     </>

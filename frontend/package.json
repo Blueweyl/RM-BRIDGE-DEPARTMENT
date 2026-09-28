@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:backend": "node ../google-apps-script/test/backend.test.cjs",
-    "test:e2e": "vite build && node tests/live-e2e.mjs"
+    "test:e2e": "vite build && node tests/live-e2e.mjs",
+    "build:demo": "vite build --mode demo"
   },
   "dependencies": {
     "@fontsource/archivo": "^5.3.0",

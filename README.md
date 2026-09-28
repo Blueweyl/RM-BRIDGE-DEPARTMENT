@@ -31,19 +31,24 @@ the phone's home screen and works without signal. It runs in two modes:
 - **Live**: connected to the Google backend (Google Sheet + Drive). Real PIN sign-in, each
   leadman sees only their own team, and reports sync to the admin on any device. Turned on
   per phone by opening the admin's setup link.
-- **Demo**: no backend; data stays in the browser (the original prototype behaviour).
+- **Demo**: no backend; data stays in the browser (the original prototype behaviour). Demo builds
+  only (`npm run dev`, `npm run build:demo`, `standalone/`): the production build contains no demo
+  PINs or demo data and, with no setup link, just says the phone is not connected.
 
 ```sh
 cd frontend
 npm install
 npm run dev            # local dev server (demo mode)
-npm run build          # production files → frontend/dist/
-npm run test:backend   # 126 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
-npm run test:e2e       # 70 end-to-end checks: leadman phones + admin computer against the real backend code
+npm run build          # production files → frontend/dist/ (no demo data)
+npm run build:demo     # offline demo build (fixed demo PINs), for training / the standalone HTML
+npm run test:backend   # 151 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
+npm run test:e2e       # 90 end-to-end checks: leadman phones + admin computer against the real backend code
 ```
 
 - `src/App.jsx`: the design's logic class; lines marked `// live` hand off to `live.js`.
-- `src/live.js`, `src/api.js`, `src/idb.js`: backend calls, device enrolment + session, idempotent retries, IndexedDB photo queue.
+- `src/live.js`, `src/api.js`, `src/idb.js`: backend calls, device enrolment + session, the outbox
+  (Draft → Pending sync → Syncing → Server confirmed / Conflict), Manila time, IndexedDB photo queue.
+- `src/demo.js`: demo PINs, crews and sample reports — compiled into demo builds only.
 - `src/View.jsx`: the screens (Login, Admin, Leadman Activity/Attendance/History).
 
 ## Backend (`google-apps-script/`)
@@ -70,7 +75,7 @@ Use **Reset demo data** on the Admin screen to clear it.
 
 ## Tests
 
-The same scripts pass against both the prototype and the built `frontend/`. Open the app, then paste a test file into the browser devtools console:
+The same scripts pass against both the prototype and the demo build of `frontend/` (`npm run build:demo`). Open the app, then paste a test file into the browser devtools console:
 
 - `tests-v3.js`: results appear in `window.__R`. For the second pass, reload the page,
   run `window.__MODE = 'reload'`, then paste the file again. This checks that drafts

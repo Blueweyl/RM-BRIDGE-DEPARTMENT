@@ -21,7 +21,7 @@ const { makeBackend } = require(path.join(HERE, '..', '..', 'google-apps-script'
 const BACKEND = 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec';
 
 const B = makeBackend();
-B.env.setup({ demoPins: true });
+B.env.setup({ pins: ['0000', '1111', '2222', '3333', '4444'] });   // fixed PINs for the test (admin, team1..team4)
 const SETUP = () => APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + B.props.SETUP_KEY;
 
 // Per-action call counts, and one-shot faults: 'fail' (network error, nothing reaches the server)
@@ -39,8 +39,8 @@ let failed = 0;
 const ok = (name, cond, detail) => { if (!cond) failed++; console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (!cond && detail !== undefined ? '  [' + detail + ']' : '')); };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium' });
 
-async function device(viewport) {
-  const ctx = await browser.newContext({ viewport, timezoneId: 'Asia/Manila', acceptDownloads: true });
+async function device(viewport, timezoneId = 'Asia/Manila') {
+  const ctx = await browser.newContext({ viewport, timezoneId, acceptDownloads: true });
   await ctx.route(BACKEND, async route => {
     const body = JSON.parse(route.request().postData());
     calls[body.action] = (calls[body.action] || 0) + 1;
@@ -75,9 +75,10 @@ const fillForm = async (page, loc) => {
   await page.fill('label:has-text("Target (KM") input', '1');
   await page.fill('label:has-text("Actual (KM") input', '1');
   await page.fill('label:has-text("Target manpower") input', '8');
+  await page.fill('input[placeholder^="e.g. NCG"]', 'NKU 8624');
 };
-async function signIn(pinCode, name) {
-  const D = await device({ width: 390, height: 844 });
+async function signIn(pinCode, name, tz) {
+  const D = await device({ width: 390, height: 844 }, tz);
   await D.page.goto(SETUP());
   await pin(D.page, pinCode);
   await waitText(D.page, "Start today's report");
@@ -87,7 +88,20 @@ async function signIn(pinCode, name) {
   return D;
 }
 
+const attUpd = () => B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
+const manilaLong = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }); };
+
 try {
+  // ── Production build: no demo PINs or demo data; no backend = no demo login ──
+  const bundle = fs.readdirSync(path.join(DIST, 'assets')).filter(f => f.endsWith('.js')).map(f => fs.readFileSync(path.join(DIST, 'assets', f), 'utf8')).join('');
+  ok('production bundle contains no demo PINs, crew names or sample reports', !/Pijay|Crisostomo|SAPANG BAGO|NFJ 6654|Demo PINs/.test(bundle) && !/['"](1111|2222|3333|4444)['"]/.test(bundle));
+  const N = await device({ width: 390, height: 844 });
+  await N.page.goto(APP);
+  await N.page.waitForSelector('button[aria-label="Digit 0"]');
+  await pin(N.page, '0000');
+  ok('app with no backend never opens a demo admin ("not connected")', await waitText(N.page, 'not connected') && !(await text(N.page)).includes('Operations Admin'));
+  await N.ctx.close();
+
   // ── Leadman phone ───────────────────────────────────────────────────────
   const X = await device({ width: 390, height: 844 });
   await X.page.goto(APP + '?backend=' + encodeURIComponent(BACKEND));
@@ -141,18 +155,24 @@ try {
   const L2 = await signIn('2222', 'Segment 10 Scupper Drain');
   await L2.page.getByRole('tab', { name: /Attendance/ }).click();
   await L2.page.click('button[aria-label="Mark Abraham Balmeo present"]');
+  L2.page.onDialog = d => d.accept('Abraham came back from leave');
   await click(L2.page, 'Update attendance');
-  ok('[11] other phone updates attendance', await waitText(L2.page, 'Attendance submitted and saved') && report().crewPresent === '8/9');
+  const attUpd = () => B.env.readAll_('AuditLog').filter(a => a.action === 'attendance updated').pop();
+  ok('[11] other phone updates attendance; the change needs a reason, kept in the audit log', await waitText(L2.page, 'Attendance submitted and saved') && report().crewPresent === '8/9'
+    && /Abraham came back/.test(attUpd().reason) && JSON.parse(attUpd().before)['Abraham Balmeo'].status === 'Leave' && JSON.parse(attUpd().after)['Abraham Balmeo'].status === 'Present');
   await L.page.click('button[aria-label="Mark Ian Enriquez not present"]');
   await L.page.locator('[aria-label="Reason for Ian Enriquez"]').getByRole('button', { name: 'Sick', exact: true }).click();
+  L.page.onDialog = d => d.accept('Ian went home sick');
   await click(L.page, 'Update attendance');
-  ok('[11] stale phone gets "changed on another device", server copy not overwritten', await waitText(L.page, 'changed on another device') && report().crewPresent === '8/9' && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Present');
+  ok('[11] stale phone: Conflict state shown, server copy not overwritten', await waitText(L.page, 'Attendance: Conflict — NOT saved') && report().crewPresent === '8/9' && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Present');
+  ok('[11] header chip shows Conflict', (await text(L.page)).includes('Conflict'));
   await L.page.waitForTimeout(600);
   ok('[11] unsent marks kept on the stale phone', await L.page.locator('button[aria-label="Mark Ian Enriquez not present"][aria-pressed="true"]').count() === 1);
   await L.page.click('button[aria-label="Mark Ian Enriquez present"]');
   await L.page.click('button[aria-label="Mark Abraham Balmeo present"]');
   await click(L.page, 'Update attendance');
-  ok('resubmit after refresh succeeds', await waitText(L.page, 'Attendance submitted and saved') && report().crewPresent === '8/9');
+  ok('resubmit after refresh accepted (same as server → no new revision)', await waitText(L.page, 'Attendance unchanged') && report().crewPresent === '8/9' && !(await text(L.page)).includes('Conflict'));
+  L.page.onDialog = null;
   await L2.ctx.close();
 
   await L.page.getByRole('tab', { name: /Activity/ }).click();
@@ -183,23 +203,18 @@ try {
   await photoFile(L.page, 'Upload After Work photo', 'IMG_2002.jpg');
   await waitText(L.page, 'After photo uploaded');
 
+  // [6] offline → queued as Pending sync → sent by itself when signal returns.
   await L.ctx.setOffline(true);
   ok('[6] offline warning shown', await waitText(L.page, 'No signal — keep working'));
   await click(L.page, 'Submit report');
-  ok('[6] offline submit refused honestly', await waitText(L.page, 'report NOT submitted'));
+  ok('[6] offline submit is queued as "Pending sync" (never shown as submitted)', await waitText(L.page, 'Report: Pending sync') && !(await text(L.page)).includes('Report submitted at'));
   ok('[6] nothing submitted on the server', report().state === 'draft');
-  ok('[6] app does not show it as submitted', !(await text(L.page)).includes('Report submitted at'));
-
+  ok('[6] header chip says Pending Sync; fields locked while waiting', (await text(L.page)).includes('Pending Sync') && await L.page.locator('fieldset').evaluate(f => f.disabled));
+  ok('[6] queued report saved on the phone (survives a restart)', (await ls(L.page, 'bnlex.live.outbox') || '').includes('act|team2|' + today));
   await L.ctx.setOffline(false);
-  await L.page.waitForTimeout(300);
-  // [5] double tap: only one submit reaches the server.
-  calls.submitReport = 0;
-  faults.submitReport = 'slow';
-  // Two taps in the same instant (before the screen can re-render), then a third a moment later.
-  await L.page.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.innerText === 'Submit report'); b.click(); b.click(); setTimeout(() => b.click(), 80); });
-  ok('[6] online submit confirmed by server', await waitText(L.page, 'Report submitted at') && report().state === 'submitted' && report().submittedBy === 'Glenn Butiong');
-  delete faults.submitReport;
-  ok('[5] double tap sent ONE submit, version 1', calls.submitReport === 1 && report().version === '1', calls.submitReport);
+  await L.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('[6] back online: sent automatically and confirmed by the server', await waitText(L.page, 'Report submitted at', 15000) && report().state === 'submitted' && report().submittedBy === 'Glenn Butiong');
+  ok('[6] "confirmed by server" shown only after the server answered; queue emptied', (await text(L.page)).includes('confirmed by server') && !(await ls(L.page, 'bnlex.live.outbox') || '').includes('act|team2'));
   ok('fields locked after submit', await L.page.locator('fieldset').evaluate(f => f.disabled));
   ok('unit and plate stored', report().unit === 'KM' && report().plateNumber === 'NKU 8624', JSON.stringify(report()));
 
@@ -216,9 +231,15 @@ try {
   ok('reopen with reason → draft + revision', await waitText(L.page, 'Report unlocked') && report().state === 'draft' && report().reopenReason === 'Wrong chainage typed');
   L.page.onDialog = null;
   await L.page.fill('input[placeholder^="e.g. CANDABA"]', 'Km.11+000 to km.10+000 C3 exit ramp');
-  await click(L.page, 'Submit report');
+  // [5] double tap: only one submit reaches the server.
+  calls.submitReport = 0;
+  faults.submitReport = 'slow';
+  // Two taps in the same instant (before the screen can re-render), then a third a moment later.
+  await L.page.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.innerText === 'Submit report'); b.click(); b.click(); setTimeout(() => b.click(), 80); });
   ok('resubmitted as version 2, original kept as revision', await waitText(L.page, 'Report submitted at') && report().version === '2'
     && B.env.readAll_('Revisions').filter(v => v.reportId === report().reportId && v.kind === 'submitted').length === 2);
+  delete faults.submitReport;
+  ok('[5] double tap sent ONE submit', calls.submitReport === 1, calls.submitReport);
 
   // [8] edited localStorage: pretend to be admin / another team.
   await L.page.evaluate(() => { const k = 'bnlex.live.session'; const s = JSON.parse(localStorage.getItem(k)); s.user = { ...s.user, role: 'admin', teamId: 'team1', team: 'All teams' }; localStorage.setItem(k, JSON.stringify(s)); });
@@ -253,10 +274,30 @@ try {
   await click(E.page, 'Submit report');
   ok('[14] lost answer: phone says NOT confirmed', await waitText(E.page, 'Report NOT confirmed') && !(await text(E.page)).includes('Report submitted at'));
   ok('[14] …but the server did save it', report('team3').state === 'submitted' && report('team3').version === '1');
-  ok('[14] unconfirmed request remembered across reloads', (await ls(E.page, 'bnlex.live.reqs') || '').includes('act|team3'));
+  ok('[14] unconfirmed record (with its request ID) remembered across reloads', (await ls(E.page, 'bnlex.live.outbox') || '').includes('act|team3'));
   await E.page.reload();
   ok('[14] after reload the phone shows the server truth: submitted', await waitText(E.page, 'Report submitted at', 10000));
-  ok('[4][14] no duplicate: still version 1, request cleared', report('team3').version === '1' && !(await ls(E.page, 'bnlex.live.reqs') || '').includes('act|team3'));
+  ok('[4][14] no duplicate: still version 1, record cleared', report('team3').version === '1' && !(await ls(E.page, 'bnlex.live.outbox') || '').includes('act|team3'));
+
+  // ── Epoxy 2 phone queues attendance offline; the admin archives a crew member meanwhile ──
+  const adminTok = B.call({ action: 'login', pin: '0000', device: 'test-admin' }).token;
+  const G4 = await signIn('4444', 'Bridge Epoxy 2');
+  await G4.page.getByRole('tab', { name: /Attendance/ }).click();
+  await G4.page.waitForSelector('button[aria-label="Mark Edgar Ortillo present"]');
+  await G4.ctx.setOffline(true);
+  await click(G4.page, 'Mark rest present');
+  await click(G4.page, 'Submit attendance (8/8)');
+  ok('offline attendance queued as "Pending sync"', await waitText(G4.page, 'Attendance: Pending sync') && !B.env.readAll_('Attendance').some(a => a.teamId === 'team4'));
+  B.call({ action: 'archiveMember', token: adminTok, personId: 'team4-edgar-ortillo' });
+  await G4.ctx.setOffline(false);
+  await G4.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('queued attendance naming a crew member archived meanwhile: refused by the server, nothing saved, shown clearly', await waitText(G4.page, 'Attendance: Not accepted by the server', 15000) && !B.env.readAll_('Attendance').some(a => a.teamId === 'team4'));
+  await G4.page.evaluate(() => window.dispatchEvent(new Event('online')));   // the next load tells the server what is still on the phone
+  await G4.page.waitForTimeout(1500);
+  await G4.page.setViewportSize({ width: 320, height: 700 });
+  ok('sync-state box fits a 320px phone (no sideways scroll)', await G4.page.evaluate(() => document.documentElement.scrollWidth <= 320));
+  await G4.page.setViewportSize({ width: 390, height: 844 });
+  ok('phone reports its refused record to the server', /rejected/.test((B.cache['queue:team4'] || {}).v || ''));
 
   // ── Admin computer ──────────────────────────────────────────────────────
   const A = await device({ width: 1280, height: 900 });
@@ -267,16 +308,19 @@ try {
   const rowText = await A.page.evaluate(() => [...document.querySelectorAll('div')].filter(d => d.style.gridTemplateColumns && d.style.gridTemplateColumns.startsWith('200px') && d.innerText.includes('Segment 10 Scupper Drain')).map(d => d.innerText).pop() || '');
   ok('row shows Submitted + photos 2/2 + manpower 8/8', /Submitted/.test(rowText) && /2 \/ 2/.test(rowText) && /8 \/ 8/.test(rowText), rowText.replace(/\n/g, ' | '));
   ok('other teams show Missing Attendance', (await text(A.page)).includes('Missing Attendance'));
+  ok('admin "Needs attention" shows work stuck on a phone', (await text(A.page)).includes('On the phone: Attendance refused by server'));
   ok('Open Google Sheet link', await A.page.locator('a:has-text("Open Google Sheet")').count() === 1);
 
   await A.page.fill('input[aria-label="From date"]', B.env.shiftDate_(today, -1));
   const [dl] = await Promise.all([A.page.waitForEvent('download'), A.page.click('button[aria-label="Download report as CSV file for Excel"]')]);
   const csv = fs.readFileSync(await dl.path(), 'utf8');
+  ok('CSV carries the stable report ID + revision number', csv.split('\r\n')[0].includes('Date,Report ID,Revision,Version') && csv.includes(report().reportId + ',' + report().rev + ',2,'));
   ok('CSV for the chosen date range downloaded', dl.suggestedFilename() === `NLEX_Daily_Report_${B.env.shiftDate_(today, -1)}_to_${today}.csv` && csv.includes('Segment 10 Scupper Drain') && csv.includes('drive.google.com/file/d/') && csv.charCodeAt(0) === 0xfeff);
   ok('.xlsx link offered', await A.page.locator('a:has-text("Download .xlsx")').count() === 1);
 
   await click(A.page, 'Show reports');
   ok('admin report overview: missing/overdue flagged, completeness shown', await waitText(A.page, 'missing/overdue') && (await text(A.page)).includes('Missing') && (await text(A.page)).includes('9/9 marked'));
+  ok('overview flags conflicts, revisions and work not yet synced from a phone', (await text(A.page)).includes('Conflict ×') && (await text(A.page)).includes('On phone, not synced') && (await text(A.page)).includes('revisions'));
   await A.page.getByRole('button', { name: /History for Segment 10 Scupper Drain/ }).first().click();
   ok('revision history viewer shows the reopen reason', await waitText(A.page, 'Wrong chainage typed'));
   await click(A.page, 'Audit log');
@@ -287,6 +331,40 @@ try {
   await A.page.fill('input[placeholder="New crew member full name"]', 'Juan Dela Cruz');
   await click(A.page, '+ Add to crew');
   ok('admin adds crew via backend', await waitText(A.page, 'Juan Dela Cruz added') && !!B.env.row_('Roster', 'team2-juan-dela-cruz'));
+
+  // ── Epoxy 2: fixed after the roster refresh; then an expired session with work queued ──
+  await click(G4.page, 'Submit attendance (7/7)');
+  ok('after the roster refresh the attendance goes through', await waitText(G4.page, 'Attendance submitted and saved') && B.env.readAll_('Attendance').filter(a => a.teamId === 'team4').length === 7);
+  await G4.ctx.setOffline(true);
+  await G4.page.click('button[aria-label="Mark Ivan Cabunag not present"]');
+  await G4.page.locator('[aria-label="Reason for Ivan Cabunag"]').getByRole('button', { name: 'Sick', exact: true }).click();
+  G4.page.onDialog = d => d.accept('Ivan sent home sick');
+  await click(G4.page, 'Update attendance');
+  ok('attendance change queued while offline', await waitText(G4.page, 'Attendance: Pending sync'));
+  const g4sid = JSON.parse(Buffer.from(JSON.parse(await ls(G4.page, 'bnlex.live.session')).token.split('.')[0], 'base64url').toString()).s;
+  B.env.upsert_('Sessions', g4sid, { expiresAt: String(Date.now() - 1000) });
+  await G4.ctx.setOffline(false);
+  await G4.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('[3] expired session: phone asks for the PIN, queued change kept', await waitText(G4.page, 'Enter your 4-digit PIN', 10000) && (await ls(G4.page, 'bnlex.live.outbox') || '').includes('att|team4'));
+  await pin(G4.page, '4444');
+  await waitText(G4.page, "Start today's report");
+  await click(G4.page, "Start today's report");
+  ok('after signing in again the queued change is sent, with its reason', await waitText(G4.page, 'Attendance submitted and saved', 15000) && B.env.readAll_('Attendance').find(a => a.name === 'Ivan Cabunag').status === 'Sick' && /Ivan sent home sick/.test(attUpd().reason));
+
+  // ── Phone set to another time zone with a clock 3 days fast ─────────────
+  const Z = await device({ width: 390, height: 844 }, 'America/Los_Angeles');
+  let clockSet = true;
+  try { await Z.page.clock.setSystemTime(new Date(Date.now() + 3 * 86400000)); } catch (e) { clockSet = false; }
+  await Z.page.goto(SETUP());
+  await pin(Z.page, '1111');
+  await waitText(Z.page, "Start today's report");
+  await click(Z.page, "Start today's report");
+  ok('wrong phone time zone/clock: the operational date shown is the Manila server date', clockSet && await waitText(Z.page, manilaLong(today), 10000), manilaLong(today));
+  await Z.page.getByRole('tab', { name: /Attendance/ }).click();
+  await click(Z.page, 'Mark rest present');
+  await click(Z.page, 'Submit attendance (8/8)');
+  ok('…and records are dated by the server (Manila), not the phone', await waitText(Z.page, 'Attendance submitted at') && report('team1').attendanceSubmittedAt.startsWith(today));
+  await Z.ctx.close();
 
   // ── App opens with no signal (service worker) ───────────────────────────
   const swReady = await E.page.evaluate(() => Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise(r => setTimeout(() => r(false), 15000))]));
@@ -306,6 +384,17 @@ try {
   await L.page.getByRole('tab', { name: /Activity/ }).click();
   B.clock.offsetDays = 0;
 
+  // ── Damaged / hand-edited data saved on the phone ───────────────────────
+  await L.page.evaluate(t => {
+    localStorage.setItem('bnlex.v3.day.' + t, JSON.stringify({ forms: { team2: 'x' }, att: { team2: [1, 2] }, photos: { team2: { before: 5 } }, attAt: { team2: { x: 1 } }, rev: { team2: 7 } }));
+    localStorage.setItem('bnlex.live.outbox', '{"bad|key":{"x":1}}');
+    localStorage.setItem('bnlex.v3.roster', 'not json');
+    localStorage.setItem('bnlex.live.teams', '5');
+    localStorage.setItem('bnlex.live.base', '[1,2]');
+  }, today);
+  await L.page.reload();
+  ok('corrupted local data: app still opens, warns, then shows the server truth', await waitText(L.page, 'damaged') && await waitText(L.page, 'Report submitted at', 10000));
+
   // ── Sign out ────────────────────────────────────────────────────────────
   const tok = JSON.parse(await ls(L.page, 'bnlex.live.session')).token;
   await click(L.page, 'Log out');
@@ -315,7 +404,7 @@ try {
   await L.page.reload();
   ok('logged out stays logged out after reload', await waitText(L.page, 'Enter your 4-digit PIN'));
 
-  for (const d of [L, A, E]) ok('no page errors', d.page.errors.length === 0, d.page.errors.join(' | '));
+  for (const d of [L, A, E, G4]) ok('no page errors', d.page.errors.length === 0, d.page.errors.join(' | '));
 } catch (e) {
   failed++; console.log('ERROR ' + (e && e.stack || e));
 } finally {

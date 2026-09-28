@@ -50,6 +50,8 @@ The URL stays the same, so phones keep working.
 
 ## 6. Put the app online
 The app is a set of files in `frontend/dist` after running `npm run build` inside `frontend/`.
+This production build contains **no demo PINs or demo data**; opened without a setup link it only
+says "not connected". (`npm run build:demo` makes the offline demo, for training only.)
 Host it anywhere that serves plain files over **https**, for example:
 - **GitHub Pages** (free for public repositories): repository **Settings → Pages → Source: GitHub Actions**,
   then **Actions → "Deploy app to GitHub Pages" → Run workflow**. The address is shown when it finishes.
@@ -78,6 +80,9 @@ Host it anywhere that serves plain files over **https**, for example:
 | Backup | Sheet: **File → Make a copy** monthly. Photos are already in Drive. |
 | See who changed what | Admin screen → **Audit log**, or the **AuditLog** tab. Run **verifyAuditLog** to check it was not edited by hand. |
 | See every version of a report | Admin screen → **Show reports** → **History**, or the **Revisions** tab |
+| Work stuck on a phone | Admin screen → **Needs attention** ("On the phone: …") or **Show reports** ("On phone, not synced", "Conflict ×N"). Ask the leadman to open the app with signal. |
+| "Audit log entries could not be written" warning | Check the AuditLog tab is intact (**verifyAuditLog**), then run **clearAuditFailures** |
+| .xlsx exports | Each export also makes a small Sheet in the photo folder's **Exports** subfolder (only the exported rows). Delete old ones whenever you like. |
 
 ## Do not
 - Rename, reorder or delete tabs or columns (the app relies on them). Editing values in the

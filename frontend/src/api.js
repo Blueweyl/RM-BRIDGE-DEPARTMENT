@@ -53,14 +53,47 @@ export async function enrollIfNeeded() {
 }
 export function hasDevice() { return !!(get('deviceKey') || get('key')); }
 
+/** The saved sign-in, or null. A damaged or edited copy is treated as signed out (the server decides anyway). */
 export function session() {
   const s = get('session');
-  return s && s.token && s.expiresAt > Date.now() ? s : null;
+  const valid = s && typeof s === 'object' && typeof s.token === 'string' && typeof s.expiresAt === 'number' && s.user && typeof s.user === 'object' && typeof s.user.role === 'string';
+  return valid && s.expiresAt > Date.now() ? s : null;
 }
 export function clearSession() { put('session', null); }
 export function setSessionUser(user) { const s = session(); if (s) put('session', { ...s, user }); }
 
 export function online() { return typeof navigator === 'undefined' || navigator.onLine !== false; }
+
+// ── Time ─────────────────────────────────────────────────────────────────
+// Operational dates and times are always Manila time, whatever time zone the phone is set to, and
+// corrected by the server clock (the phone clock can be wrong). Audit times are stamped by the server.
+export const TZ = 'Asia/Manila';
+let skew = Number(get('skew')) || 0;
+/** Remember how far the phone clock is from the server clock (sent with every load and sign-in). */
+export function setServerTime(ms) {
+  if (typeof ms !== 'number' || !isFinite(ms)) return;
+  const next = ms - Date.now();
+  if (Math.abs(next - skew) > 2000) { skew = next; put('skew', skew); }
+}
+export function clockSkew() { return skew; }
+export function nowMs() { return Date.now() + skew; }
+function mnlParts(ms) {
+  const o = {};
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(ms)).forEach(p => { o[p.type] = p.value; });
+  return o;
+}
+/** "2026-09-28" in Manila. */
+export function manilaDay(ms = nowMs()) { const p = mnlParts(ms); return `${p.year}-${p.month}-${p.day}`; }
+/** "2026-09-28 15:42" in Manila. */
+export function manilaStamp(ms = nowMs()) { const p = mnlParts(ms); return `${p.year}-${p.month}-${p.day} ${p.hour === '24' ? '00' : p.hour}:${p.minute}`; }
+/** "3:42 PM" in Manila. */
+export function manilaTime(ms = nowMs()) { return new Date(ms).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }); }
+/** Format a calendar date ("2026-09-28") without letting the phone's time zone shift it. */
+export function fmtDay(iso, opts) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
+}
 
 export class ApiError extends Error {
   constructor(msg, extra) { super(msg); Object.assign(this, extra || {}); }
@@ -72,7 +105,7 @@ export class ApiError extends Error {
  * failure to get a proper JSON answer is treated as "not confirmed" and the caller keeps its data.
  */
 export async function call(action, data = {}, { timeout = 45000 } = {}) {
-  if (!online()) throw new ApiError('No signal. Nothing was sent.', { offline: true });
+  if (!online()) throw new ApiError('No signal. Nothing was sent.', { offline: true, notSent: true });
   const s = session();
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
@@ -90,10 +123,11 @@ export async function call(action, data = {}, { timeout = 45000 } = {}) {
   let j;
   try { j = await res.json(); } catch (e) { throw new ApiError('Unexpected reply from the server (' + res.status + '). Nothing was confirmed — try again.', { offline: true }); }
   if (!j || typeof j !== 'object') throw new ApiError('Unexpected reply from the server. Nothing was confirmed — try again.', { offline: true });
+  if (j.serverTime) setServerTime(j.serverTime);
   if (!j.ok) {
     if (j.auth) clearSession();
     if (j.notSetUp) put('deviceKey', null);
-    throw new ApiError(j.error || 'Request failed', { auth: !!j.auth, wrongPin: !!j.wrongPin, notSetUp: !!j.notSetUp, missing: j.missing, conflict: !!j.conflict, denied: !!j.denied, retry: !!j.retry });
+    throw new ApiError(j.error || 'Request failed', { auth: !!j.auth, wrongPin: !!j.wrongPin, notSetUp: !!j.notSetUp, missing: j.missing, conflict: !!j.conflict, denied: !!j.denied, retry: !!j.retry, needReason: !!j.needReason });
   }
   return j;
 }
@@ -102,7 +136,7 @@ export async function login(pin) {
   await enrollIfNeeded();
   if (!get('deviceKey')) throw new ApiError('This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
   const j = await call('login', { pin, deviceKey: get('deviceKey') });
-  put('session', { token: j.token, user: j.user, expiresAt: j.expiresAt });
+  if (!saveLocal('session', { token: j.token, user: j.user, expiresAt: j.expiresAt })) throw new ApiError('Phone storage is full — cannot stay signed in. Free up space and try again.');
   return j.user;
 }
 

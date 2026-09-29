@@ -53,6 +53,7 @@ var TABLES = {
   Roster: [
     ['personId', 'Person ID'], ['teamId', 'Team ID'], ['name', 'Name'], ['role', 'Role'], ['status', 'Status'],
     ['createdAt', 'Created'], ['updatedAt', 'Updated'], ['archivedAt', 'Archived'], ['editedBy', 'Edited By'],
+    ['reportName', 'Report Name (LAST, FIRST M.)'],
   ],
   Attendance: [
     ['key', 'Key'], ['reportId', 'Report ID'], ['reportDate', 'Date'], ['teamId', 'Team ID'], ['personId', 'Person ID'], ['name', 'Name'], ['role', 'Role'],
@@ -187,6 +188,10 @@ function setup(options) {
   else if (!props.getProperty('SETUP_KEY_EXPIRES')) props.setProperty('SETUP_KEY_EXPIRES', String(Date.now() + SETUP_KEY_DAYS * 86400000));
   photoRoot_();
   accSheet_();
+  // Crew names as written in the client's reports (LAST, FIRST M.), filled once; editable in the Roster tab.
+  readAll_('Roster').forEach(function (m) { if (!m.reportName && REPORT_NAMES[m.personId]) upsert_('Roster', m.personId, { reportName: REPORT_NAMES[m.personId] }); });
+  Object.keys(TEAM_REPORT_TABS).forEach(function (t) { if (row_('Teams', t)) teamReportSheet_(t); });
+  ATTENDANCE_TABS.forEach(function (cfg) { if (row_('Teams', cfg.teamId)) attendanceTabWrite_(cfg); });
   audit_({ name: 'setup', role: 'system' }, '', 'setup', 'system', '', null, null, 'setup() run');
   Logger.log('Setup complete. Write the PINs above down now — the Users tab only keeps a hash.');
   Logger.log('Next: Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), then run showSetupLink.');
@@ -238,6 +243,22 @@ function clearLoginLock() { PropertiesService.getScriptProperties().deleteProper
 
 /** After checking the cause, clear the "audit entries could not be written" warning on the admin screen. */
 function clearAuditFailures() { PropertiesService.getScriptProperties().deleteProperty('AUDIT_FAILURES'); }
+
+/** Rebuild every client report tab (team activity tabs + attendance tabs) from the saved data. */
+function rebuildClientTabs() {
+  CACHE = {};
+  var n = 0;
+  Object.keys(TEAM_REPORT_TABS).forEach(function (teamId) {
+    var sh = teamReportSheet_(teamId), last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, TR_COLS).clearContent();
+    readAll_('DailyReports').filter(function (r) { return r.teamId === teamId && (r.state === 'submitted' || Number(r.version) > 0); })
+      .sort(function (a, b) { return a.reportDate.localeCompare(b.reportDate); })
+      .forEach(function (r) { teamReportWrite_(r); n++; });
+  });
+  ATTENDANCE_TABS.forEach(function (cfg) { attendanceTabWrite_(cfg); });
+  Logger.log('Client tabs rebuilt: ' + n + ' report rows, ' + ATTENDANCE_TABS.length + ' attendance tabs.');
+  return n;
+}
 
 /** Rebuild the Accomplishment Report tab from every submitted report (e.g. after editing it by hand). */
 function rebuildAccomplishmentReport() {
@@ -730,6 +751,7 @@ function saveAttendance_(s, req) {
     hadAttendance ? was : null,
     hadAttendance ? now_is : { crewPresent: present + '/' + rows.length, notPresent: absentList },
     hadAttendance ? reason + ' — ' + changes.join('; ') : '', rev);
+  clientTabs_(s, teamId, null);
   return { ok: true, attendanceSubmittedAt: now, crewPresent: present + '/' + rows.length, rev: rev, reportId: rep.reportId };
 }
 
@@ -924,6 +946,7 @@ function submitReport_(s, req) {
   var rep = row_('DailyReports', key);
   revision_(s, rep, 'submitted', row.version === '1' ? '' : changes.join('; '));
   accUpdate_(s, rep);
+  clientTabs_(s, rep.teamId, rep);
   audit_(s.user, teamId, row.version === '1' ? 'report submitted' : 'report resubmitted (v' + row.version + ')', 'report', rep.reportId,
     old.version > 0 ? beforeVals : null, afterVals, (old.reopenReason && row.version !== '1' ? 'Reopened because: ' + old.reopenReason + ' — ' : '') + (changes.length ? changes.join('; ') : (row.version === '1' ? clean.status + ' · ' + short_(clean.location) : 'no field changes')), row.rev);
   return { ok: true, submittedAt: now, submittedBy: s.user.name, version: row.version, rev: row.rev, reportId: rep.reportId, late: row.late };
@@ -1012,6 +1035,158 @@ function accUpdate_(s, rep) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Client report tabs — the per-team layouts from the client workbook (BRIDGE NLEX SAMPLE.xlsx):
+//   "<team>" activity tab   one row per submitted report (Days, Date, From, To, Location, ...)
+//   "Attendance <team>"     a month grid: crew × day, 1 = present, 0 = not present, totals,
+//                           equipment and vehicle rows
+// Both are rewritten automatically from the app's data; nobody types into them.
+// ════════════════════════════════════════════════════════════════════════════
+
+var TEAM_REPORT_TABS = {
+  team1: { tab: 'Bridge RM_Team 1', km: ['Target (KM)', 'Actual (KM)'] },
+  team2: { tab: 'Segment 10 Scupper Drain', km: ['Target (KM)\nStation', 'Actual (KM)\nStation'] },
+};
+var ATTENDANCE_TABS = [
+  { tab: 'Attendance Bridge RM', teamId: 'team1', label: 'Bridge RM', equipTitle: 'BRIDGE RM EQUIPMENT', equipment: ['Grass Cutter', 'Pressure washer'], vehicleTitle: 'BRIDGE RM VEHICLE' },
+  { tab: 'Attendance Segment 10', teamId: 'team2', label: 'Segment 10', equipTitle: 'BRIDGE SEG 10 EQUIPMENT', equipment: ['Grass Cutter', 'Pressure washer'], vehicleTitle: 'BRIDGE SEG 10 VEHICLE' },
+];
+var ATT_TITLE = 'BRIDGE CONNECTOR NLEX - ACCOMPLISHMENT REPORT';
+var ATT_SLOTS = { Skilled: 2, Crew: 6 };            // contract: 1 driver/leadman + 2 skilled + 6 non-skilled = 9
+var TR_COLS = 22;                                   // 21 client columns + hidden Report ID
+var WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// Full names as they appear in the client's attendance sheets.
+var REPORT_NAMES = {
+  'team1-pijay-tanjeco': 'TANJECO, PIJAY C.', 'team1-justin-billones': 'BILLONES, JUSTIN B.', 'team1-ignacio-alcoriza-jr': 'ALCORIZA, IGNACIO JR. C.',
+  'team1-alvin-angelo': 'ANGELO, ALVIN G.', 'team1-joven-blanza': 'BLANZA, JOVEN B.', 'team1-rocky-miranda': 'MIRANDA, ROCKY B.',
+  'team1-richard-candelaria': 'CANDELARIA, RICHARD S.', 'team1-crisostomo-sebuc': 'SEBUC, CRISOSTOMO G.',
+  'team2-glenn-butiong': 'BUTIONG, GLENN A.', 'team2-glen-jorick-de-mesa': 'DE MESA, GLEN JORICK M.', 'team2-justine-gregg-baylon': 'BAYLON, JUSTINE GREGG F.',
+  'team2-john-christian-bernardo': 'BERNARDO, JOHN CHRISTIAN R.', 'team2-ian-enriquez': 'ENRIQUEZ, IAN T.', 'team2-joanner-royce-quilao': 'QUILAO, JOANNER ROYCE R.',
+  'team2-rolando-faustino': 'FAUSTINO, ROLANDO G.', 'team2-richard-santiago': 'SANTIAGO, RICHARD A.', 'team2-abraham-balmeo': 'BALMEO, ABRAHAM P.',
+};
+
+/** "Justin Billones" → "BILLONES, JUSTIN" (used until the Roster's Report Name is filled in). */
+function reportName_(m) {
+  if (m && m.reportName) return m.reportName;
+  var parts = String(m && m.name || '').trim().split(/\s+/), suffix = '';
+  if (parts.length > 2 && /^(jr|sr|ii|iii|iv)\.?$/i.test(parts[parts.length - 1])) suffix = ' ' + parts.pop();
+  if (parts.length < 2) return String(m && m.name || '').toUpperCase();
+  var last = parts.pop();
+  return (last + ', ' + parts.join(' ') + suffix).toUpperCase();
+}
+
+function weekday_(iso) { var p = iso.split('-').map(Number); return WEEKDAYS[new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()]; }
+
+/** Run after a report or attendance is saved. A failure never undoes the save, but is recorded. */
+function clientTabs_(s, teamId, rep) {
+  try {
+    if (rep && TEAM_REPORT_TABS[teamId]) teamReportWrite_(rep);
+    ATTENDANCE_TABS.forEach(function (cfg) { if (cfg.teamId === teamId) attendanceTabWrite_(cfg); });
+  } catch (e) {
+    Logger.log('client tab update failed: ' + e);
+    audit_(s.user, teamId, 'client report tab update failed', 'report', rep ? rep.reportId : '', null, null, String(e && e.message || e).slice(0, 300), rep ? rep.rev : '');
+  }
+}
+
+function teamReportSheet_(teamId) {
+  var cfg = TEAM_REPORT_TABS[teamId], ss = db_(), sh = ss.getSheetByName(cfg.tab);
+  if (sh && sh.getLastRow() >= 1) return sh;
+  if (!sh) sh = ss.insertSheet(cfg.tab);
+  var head = ['Days', 'Date', 'From', 'To', 'Location ', 'Activity', 'Activity Details', 'Status', cfg.km[0], cfg.km[1], 'Before', 'After', 'Target (EQP)', 'Actual (EQP',
+    'Plate Number', 'Target (Manpower)', 'Actual (Manpower)', 'Team', 'Target (Leadman)', 'Actual (Leadman)', 'Leadman/Driver', 'Report ID'];
+  sh.getRange(1, 1, 1, TR_COLS).setValues([head]).setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+  sh.setFrozenRows(1);
+  [15, 22, 10, 9, 32, 20, 34, 15, 18, 18, 34, 35, 19, 18, 21, 28, 34, 35, 25, 23, 24].forEach(function (w, i) { sh.setColumnWidth(i + 1, Math.round(w * 7)); });
+  sh.hideColumns(22);
+  return sh;
+}
+
+/** Write (or rewrite) one report's row in its team's activity tab. */
+function teamReportWrite_(r) {
+  var sh = teamReportSheet_(r.teamId), last = sh.getLastRow(), row = 0;
+  if (last >= 2) {
+    var ids = sh.getRange(2, TR_COLS, last - 1, 1).getDisplayValues();
+    for (var i = 0; i < ids.length; i++) if (ids[i][0] === r.reportId) { row = 2 + i; break; }
+  }
+  if (!row) row = Math.max(last + 1, 2);
+  if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 200);
+  var photos = {};
+  readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
+  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
+  var byId = {};
+  readAll_('Roster').forEach(function (m) { byId[m.personId] = m; });
+  var att = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate; });
+  var crew = att.filter(function (a) { return a.status === 'Present' && a.role !== 'Leadman'; }).map(function (a) { return safeCell_(reportName_(byId[a.personId] || { name: a.name })); });
+  var lead = att.filter(function (a) { return a.role === 'Leadman'; })[0];
+  var v = [weekday_(r.reportDate), r.reportDate, r.fromTime, r.toTime, safeCell_(r.location), safeCell_(r.team), safeCell_(r.activityDetails), String(r.status || '').toUpperCase(),
+    r.target, r.actual, img(r.beforePhotoId), img(r.afterPhotoId), '1', r.plateNumber ? '1' : '0', safeCell_(r.plateNumber),
+    r.targetManpower, r.actualManpower, crew.join('\n'), '1', lead ? (lead.status === 'Present' ? '1' : '0') : '', safeCell_(r.leadman), r.reportId];
+  var fmt = ['@', 'dd-mmm-yy', 'h:mm AM/PM', 'h:mm AM/PM', '@', '@', '@', '@', 'General', 'General', 'General', 'General', 'General', 'General', '@', 'General', 'General', '@', 'General', 'General', '@', '@'];
+  var range = sh.getRange(row, 1, 1, TR_COLS);
+  range.setNumberFormats([fmt]);
+  range.setValues([v]);
+  range.setVerticalAlignment('middle').setWrap(true);
+  sh.setRowHeight(row, 160);
+  return row;
+}
+
+/** Rewrite a team's attendance grid (people × days) from the Attendance tab. */
+function attendanceTabWrite_(cfg) {
+  var ss = db_(), sh = ss.getSheetByName(cfg.tab) || ss.insertSheet(cfg.tab);
+  var roster = readAll_('Roster').filter(function (m) { return m.teamId === cfg.teamId; });
+  var marks = {}, dates = {};
+  readAll_('Attendance').forEach(function (a) {
+    if (a.teamId !== cfg.teamId) return;
+    marks[a.personId + '|' + a.reportDate] = a.status === 'Present' ? 1 : 0;
+    dates[a.reportDate] = true;
+  });
+  // Columns: from the 1st of the first month with attendance to the end of the current month.
+  var first = Object.keys(dates).sort()[0] || today_(), start = first.slice(0, 8) + '01';
+  var t = today_(), end = shiftDate_(shiftDate_(t.slice(0, 8) + '01', 32).slice(0, 8) + '01', -1), days = [];
+  for (var d = start; d <= end; d = shiftDate_(d, 1)) days.push(d);
+  // Rows: leadman, then skilled and crew slots (at least 2 and 6), including anyone archived who worked in the period.
+  var worked = function (m) { return m.status === 'Active' || days.some(function (dd) { return marks[m.personId + '|' + dd] !== undefined; }); };
+  var group = function (role) { return roster.filter(function (m) { return m.role === role && worked(m); }); };
+  var slots = [].concat(group('Leadman').map(function (m) { return ['Driver/Leadman', m]; }));
+  if (!slots.length) slots.push(['Driver/Leadman', null]);
+  ['Skilled', 'Crew'].forEach(function (role) {
+    var g = group(role);
+    for (var i = 0; i < Math.max(ATT_SLOTS[role], g.length); i++) slots.push([role, g[i] || null]);
+  });
+  var width = 3 + days.length, blank = function () { var r = []; for (var i = 0; i < width; i++) r.push(''); return r; };
+  var line = function (a, b, c, vals) { return [a, b, c].concat(vals); };
+  var grid = [blank(), line(ATT_TITLE, '', '', days), line('No.', cfg.label, 'NAME', days.map(weekday_))];
+  var val = function (m, dd) { var x = m ? marks[m.personId + '|' + dd] : undefined; return x === undefined ? '' : x; };
+  var sums = { lead: [], skilled: [], crew: [] };
+  slots.forEach(function (sl, i) {
+    grid.push(line(String(i + 1), sl[0], sl[1] ? safeCell_(reportName_(sl[1])) : '', days.map(function (dd) { return val(sl[1], dd); })));
+  });
+  var workDay = function (dd) { return !!dates[dd]; };
+  var total = function (role) { return days.map(function (dd) { if (!workDay(dd)) return ''; var n = 0; slots.forEach(function (sl) { if (sl[0] === role && sl[1]) n += Number(val(sl[1], dd) || 0); }); return n; }); };
+  grid.push(blank(), blank());
+  grid.push(line('TOTAL MANPOWER REQUIRED', '', '', days.map(function (dd) { return workDay(dd) ? 1 + ATT_SLOTS.Skilled + ATT_SLOTS.Crew : ''; })));
+  grid.push(line('Driver (6 days, day shift, 8 hours shift per pax) ', '', '', total('Driver/Leadman')));
+  grid.push(line('Skilled labor (6 days, 8 hours shift per pax) AM shift', '', '', total('Skilled')));
+  grid.push(line('Non-Skilled labor (6 days, 8 hours shift per pax) AM shift', '', '', total('Crew')));
+  grid.push(blank(), blank());
+  grid.push(line(cfg.equipTitle, '', '', days.map(function () { return ''; })));
+  cfg.equipment.forEach(function (eq, i) { grid.push(line(String(i + 1), eq, '', days.map(function (dd) { return workDay(dd) ? 1 : ''; }))); });
+  grid.push(blank());
+  grid.push(line('', cfg.vehicleTitle, '', days.map(function () { return ''; })));
+  var plates = readAll_('DailyReports').filter(function (r) { return r.teamId === cfg.teamId && r.plateNumber; }).sort(function (a, b) { return b.reportDate.localeCompare(a.reportDate); });
+  grid.push(line('1', plates.length ? safeCell_(plates[0].plateNumber) : '', '', total('Driver/Leadman')));
+
+  sh.clearContents();
+  if (sh.getMaxRows() < grid.length) sh.insertRowsAfter(sh.getMaxRows(), grid.length - sh.getMaxRows());
+  sh.getRange(1, 1, grid.length, width).setValues(grid.map(function (r) { return r.map(function (x) { return x === '' ? '' : x; }); }));
+  sh.getRange(2, 4, 1, days.length).setNumberFormat('d-mmm-yy');
+  sh.getRange(2, 1, 1, 3).merge();
+  sh.getRange(2, 1, 2, width).setFontWeight('bold').setHorizontalAlignment('center');
+  sh.setFrozenRows(3);
+  return grid.length;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Roster (admin)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1026,6 +1201,7 @@ function addMember_(s, req) {
   var role = req.role === 'Skilled' ? 'Skilled' : 'Crew';
   upsert_('Roster', id, { personId: id, teamId: teamId, name: name, role: role, status: 'Active', createdAt: now, updatedAt: now, editedBy: s.user.name });
   audit_(s.user, teamId, 'crew added', 'person', id, null, { name: name, role: role }, '');
+  clientTabs_(s, teamId, null);
   return { ok: true, personId: id };
 }
 
@@ -1036,6 +1212,7 @@ function archiveMember_(s, req) {
   var now = now_();
   upsert_('Roster', m.personId, { status: 'Archived', archivedAt: now, updatedAt: now, editedBy: s.user.name });
   audit_(s.user, m.teamId, 'crew archived', 'person', m.personId, { status: m.status }, { status: 'Archived' }, m.name + ' (attendance history kept)');
+  clientTabs_(s, m.teamId, null);
   return { ok: true };
 }
 
@@ -1044,6 +1221,7 @@ function restoreMember_(s, req) {
   if (!m) throw new Error('Person not found');
   upsert_('Roster', m.personId, { status: 'Active', archivedAt: '', updatedAt: now_(), editedBy: s.user.name });
   audit_(s.user, m.teamId, 'crew restored', 'person', m.personId, { status: m.status }, { status: 'Active' }, m.name);
+  clientTabs_(s, m.teamId, null);
   return { ok: true };
 }
 

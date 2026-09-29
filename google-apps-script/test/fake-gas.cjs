@@ -23,7 +23,7 @@ function makeBackend(opts = {}) {
     put(i, j, v) { if (this.r + i > this.sh.maxRows) throw new Error('Range out of bounds'); while (this.sh.data.length < this.r + i) this.sh.data.push([]); this.sh.data[this.r - 1 + i][this.c - 1 + j] = v; }
     setValues(vs) { if (vs.length !== this.nr || vs[0].length !== this.nc) throw new Error('setValues size mismatch'); vs.forEach((row, i) => row.forEach((v, j) => this.put(i, j, v))); return this; }
     setNumberFormats() { return this; } setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
-    setValue(v) { this.put(0, 0, v); return this; } merge() { return this; } setFontSize() { return this; } setHorizontalAlignment() { return this; }
+    setValue(v) { this.put(0, 0, v); return this; } setNumberFormat() { return this; } merge() { return this; } setFontSize() { return this; } setHorizontalAlignment() { return this; }
     setVerticalAlignment() { return this; } setWrap() { return this; } clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) if (this.at(i, j) !== undefined) this.put(i, j, ''); return this; }
   }
   class Sheet {

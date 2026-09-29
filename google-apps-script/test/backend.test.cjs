@@ -276,6 +276,28 @@ ok('running setup() again keeps the tab and its rows', JSON.stringify(accRows())
 const nReb = B.env.rebuildAccomplishmentReport();
 ok('rebuildAccomplishmentReport() regenerates the same rows from the reports', nReb === 2 && JSON.stringify(accRows()) === before, nReb + ' ' + JSON.stringify(accRows().map(r => r.slice(0, 7))) + ' vs ' + JSON.stringify(JSON.parse(before).map(r => r.slice(0, 7))));
 
+// ── Client report tabs (per-team activity tab + attendance grid) ────────
+const TR = B.sheets['Segment 10 Scupper Drain'], AT = B.sheets['Attendance Segment 10'];
+ok('client tabs created by setup', ['Bridge RM_Team 1', 'Segment 10 Scupper Drain', 'Attendance Bridge RM', 'Attendance Segment 10'].every(n => B.sheets[n]), Object.keys(B.sheets).join());
+ok('activity tab has the client columns', TR.data[0].slice(0, 21).join('|') === 'Days|Date|From|To|Location |Activity|Activity Details|Status|Target (KM)\nStation|Actual (KM)\nStation|Before|After|Target (EQP)|Actual (EQP|Plate Number|Target (Manpower)|Actual (Manpower)|Team|Target (Leadman)|Actual (Leadman)|Leadman/Driver', JSON.stringify(TR.data[0]));
+const trRows = TR.data.slice(1).filter(r => r && r[21]);
+const wd = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(today + 'T12:00:00Z').getUTCDay()];
+const tr = trRows.find(r => r[21] === reportId);
+ok('submitted report fills a row in its team tab (one row, updated on resubmit)', trRows.filter(r => r[21] === reportId).length === 1 && tr[0] === wd && tr[1] === today && tr[2] === '07:00' && tr[4] === 'Km.12'
+  && tr[5] === 'Segment 10 Scupper Drain' && tr[7] === 'COMPLETE' && tr[14] === 'NKU 8624' && tr[20] === 'Glenn Butiong' && tr[19] === '1', JSON.stringify(tr));
+ok('Team column lists present crew in LAST, FIRST M. form (leadman separate)', tr[17].split('\n').includes('DE MESA, GLEN JORICK M.') && !tr[17].includes('BUTIONG') && !tr[17].includes('FAUSTINO') && tr[16] === rep2.actualManpower, tr[17]);
+ok('Roster keeps the report name (filled from the client sheets, editable)', B.env.row_('Roster', 'team2-ian-enriquez').reportName === 'ENRIQUEZ, IAN T.');
+const col = AT.data[1].indexOf(today), gridPeople = AT.data.slice(3, 12);
+ok('attendance grid: title, dates across, weekday row, 9 slots', AT.data[1][0] === 'BRIDGE CONNECTOR NLEX - ACCOMPLISHMENT REPORT' && col > 2 && AT.data[2][col] === wd && AT.data[2][2] === 'NAME' && gridPeople.length === 9 && AT.data[3][1] === 'Driver/Leadman' && AT.data[3][2] === 'BUTIONG, GLENN A.', JSON.stringify(AT.data.slice(1, 5).map(r => r.slice(0, col + 1))));
+const mark = n => gridPeople.find(r => r[2] === n)[col];
+ok('attendance grid: 1 = present, 0 = leave/other; no data = blank', mark('BUTIONG, GLENN A.') === 1 && mark('FAUSTINO, ROLANDO G.') === 0 && mark('BALMEO, ABRAHAM P.') === 0 && mark('DE MESA, GLEN JORICK M.') === 1 && gridPeople[0][col === 3 ? 4 : 3] === '', gridPeople.map(r => r[2] + ':' + r[col]).join(', '));
+const rowOf = label => AT.data.find(r => r && String(r[0]).startsWith(label));
+ok('attendance grid totals: required 9, driver 1, skilled, non-skilled', rowOf('TOTAL MANPOWER REQUIRED')[col] === 9 && rowOf('Driver')[col] === 1 && rowOf('Skilled labor')[col] === 2 && rowOf('Non-Skilled labor')[col] === 4, [rowOf('TOTAL')[col], rowOf('Driver')[col], rowOf('Skilled')[col], rowOf('Non-Skilled')[col]].join());
+ok('attendance grid: equipment and vehicle rows', AT.data.some(r => r && r[0] === 'BRIDGE SEG 10 EQUIPMENT') && AT.data.find(r => r && r[1] === 'Grass Cutter')[col] === 1 && AT.data.find(r => r && r[1] === 'NKU 8624')[col] === 1);
+const trBefore = JSON.stringify(trRows), atBefore = JSON.stringify(AT.data);
+B.env.rebuildClientTabs();
+ok('rebuildClientTabs() regenerates the same tabs', JSON.stringify(B.sheets['Segment 10 Scupper Drain'].data.slice(1).filter(r => r && r[21])) === trBefore && JSON.stringify(B.sheets['Attendance Segment 10'].data) === atBefore);
+
 // ── Roster ──────────────────────────────────────────────────────────────
 r = call({ action: 'addMember', token: T.admin, teamId: 'team2', name: '  Juan  Dela Cruz ' });
 ok('admin adds crew', r.ok && r.personId === 'team2-juan-dela-cruz');

@@ -83,6 +83,7 @@ Host it anywhere that serves plain files over **https**, for example:
 | Work stuck on a phone | Admin screen → **Needs attention** ("On the phone: …") or **Show reports** ("On phone, not synced", "Conflict ×N"). Ask the leadman to open the app with signal. |
 | "Audit log entries could not be written" warning | Check the AuditLog tab is intact (**verifyAuditLog**), then run **clearAuditFailures** |
 | Accomplishment Report tab | Filled automatically, one row per submitted report, in the weekly report layout. If it is edited by hand or rows get mixed up, run **rebuildAccomplishmentReport** to regenerate it from the reports. |
+| Client report tabs (Bridge RM_Team 1, Segment 10 Scupper Drain, Attendance …) | Filled automatically in the client's format. Names use the Roster's **Report Name** column (e.g. BILLONES, JUSTIN B.) — fill it in for new crew. Run **rebuildClientTabs** to regenerate them. |
 | .xlsx exports | Each export also makes a small Sheet in the photo folder's **Exports** subfolder (only the exported rows). Delete old ones whenever you like. |
 
 ## Do not

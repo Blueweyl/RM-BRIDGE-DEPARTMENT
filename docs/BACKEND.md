@@ -76,6 +76,8 @@ is stored with a leading `'` so Sheets never runs it as a formula.
 | **AuditLog** | (append-only) | who (name, role, user ID), team, action, entity + ID, report revision, before, after, reason, request ID, device, server time, **chain hash** |
 | **Sessions** | sessionId | user, role, team, device, created, expires, revoked |
 | **Accomplishment Report** | (report ID, hidden col P) | the team's "Bridge Team Accomplishment Report" layout: #, Date, From, To, Location, Activity, Status, Before/After photo (in the cell), Qty + Equipment, Qty + Manpower (crew present that day), Qty + Leadman/Driver. One row per submitted report, filled automatically; a resubmitted report updates its row. `rebuildAccomplishmentReport()` regenerates it |
+| **Bridge RM_Team 1**, **Segment 10 Scupper Drain** | (report ID, hidden col V) | the client workbook's per-team activity layout (Days, Date, From, To, Location, Activity, Activity Details, Status, Target/Actual KM, Before/After, Target/Actual EQP, Plate, Target/Actual Manpower, Team names, Target/Actual Leadman, Leadman/Driver). One row per submitted report, filled automatically |
+| **Attendance Bridge RM**, **Attendance Segment 10** | — | the client's attendance grid: crew × day (1 present, 0 not present, blank no report), 1 driver + 2 skilled + 6 crew slots, totals, equipment and vehicle rows. Rewritten whenever attendance or the crew changes. Names come from the Roster's **Report Name** column (LAST, FIRST M.). `rebuildClientTabs()` regenerates these tabs |
 | **Requests** | user \| action \| requestId | idempotency ledger: every accepted write's request ID, a hash of its data and the answer. A retry gets the same answer; the same ID with different data is refused |
 
 - **draft**: attendance is in, but the report is not submitted yet (or it was reopened).
@@ -258,7 +260,7 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 169 backend checks, incl. adversarial cases
+node google-apps-script/test/backend.test.cjs      # 179 backend checks, incl. adversarial cases
 cd frontend && npm run test:e2e                     # 112 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake

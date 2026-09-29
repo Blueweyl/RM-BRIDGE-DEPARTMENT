@@ -12,7 +12,7 @@ function makeBackend(opts = {}) {
   const codePath = opts.code || path.join(__dirname, '..', 'Code.gs');
   const sheets = {}, files = {}, props = {}, cache = {}, exports_ = {};
   let seq = 0;
-  const clock = { offsetDays: 0 };
+  const clock = { offsetDays: 0 }, logs = [], service = { url: 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' };
   const cellStr = v => (v == null ? '' : String(v));
   class Range {
     constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr: nr || 1, nc: nc || 1 }); }
@@ -66,8 +66,8 @@ function makeBackend(opts = {}) {
       getFolderById: id => { if (!folders[id]) throw new Error('not found'); return folders[id]; },
       getFoldersByName: n => ({ hasNext: () => !!roots[n], next: () => roots[n] }), createFolder: n => (roots[n] = mkFolder(n)),
       getFileById: id => { if (files[id]) return files[id]; if (exports_[id]) return { moveTo: f => { exports_[id].folder = f; } }; throw new Error('File not found: ' + id); } },
-    ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' }) },
-    Logger: { log() {} }, console, Date, JSON, Math, Object, String, Number, Array, Error, RegExp, Buffer,
+    ScriptApp: { getService: () => ({ getUrl: () => service.url }) },
+    Logger: { log(m) { logs.push(String(m)); } }, console, Date, JSON, Math, Object, String, Number, Array, Error, RegExp, Buffer,
   };
   vm.createContext(env);
   vm.runInContext(fs.readFileSync(codePath, 'utf8'), env);
@@ -87,6 +87,6 @@ function makeBackend(opts = {}) {
     if (body.action === 'login' && out.ok) tokenDevice[out.token] = body.deviceKey;
     return out;
   };
-  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_ };
+  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_, logs, service };
 }
 module.exports = { makeBackend };

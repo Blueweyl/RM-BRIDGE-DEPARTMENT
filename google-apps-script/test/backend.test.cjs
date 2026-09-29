@@ -465,6 +465,19 @@ ok('[P3] a phone connected before this change (no Devices row) still signs in', 
 const LNK4 = H.env.newSetupLink_().token; H.env.forgetAllPhones();
 ok('[P3] forgetAllPhones also cancels outstanding links', /not valid/.test(H.raw({ action: 'enroll', setupKey: LNK4, enrollId: 'phone-D-enrol-1' }).error || ''));
 
+// showSetupLink prints a usable link only with the real Web app address (/exec)
+const enrKeys = () => Object.keys(H.props).filter(k => k.startsWith('ENR_')).length;
+H.logs.length = 0; H.env.showSetupLink();
+const printed = H.logs.find(l => l.includes('?backend=')) || '', pq = new URL(printed).searchParams;
+ok('[P3] showSetupLink prints the app link with the /exec backend and a fresh key', /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(pq.get('backend')) && /^[a-f0-9]{40}$/.test(pq.get('key')), printed);
+ok('[P3] …and that printed link really connects a phone', H.raw({ action: 'enroll', setupKey: pq.get('key'), enrollId: 'printed-link-1' }).ok);
+H.service.url = 'https://script.google.com/macros/s/HEAD-DEPLOYMENT/dev'; H.logs.length = 0;
+const enrBefore = enrKeys(); H.env.showSetupLink();
+ok('[P3] if Apps Script reports its test (/dev) address, no link is made and the log says how to fix it', enrKeys() === enrBefore && !H.logs.some(l => l.includes('?backend=')) && H.logs.some(l => /NO LINK MADE/.test(l) && /\/dev/.test(l)));
+H.service.url = 'https://script.google.com/a/macros/example.com/s/WORKSPACE-ID/exec'; H.logs.length = 0; H.env.showSetupLink();
+ok('[P3] Google Workspace web app addresses are accepted', H.logs.some(l => l.includes(encodeURIComponent('/a/macros/example.com/s/WORKSPACE-ID/exec'))));
+H.service.url = 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec';
+
 // Device revocation (fresh backend so earlier sign-outs do not interfere)
 const V = makeBackend(); V.env.setup({ pins: DEMO_PINS });
 const vc = V.call, vdev = name => V.env.unsign_(V.deviceKey(name), 'DEVICE_SECRET').d;

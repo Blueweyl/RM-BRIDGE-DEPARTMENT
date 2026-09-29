@@ -228,10 +228,21 @@ function setup(options) {
  */
 function showSetupLink() {
   var APP_ADDRESS = 'https://bridge-nlex-report.netlify.app/';   // where the app is hosted (Netlify)
+  // Your Web app URL: Deploy → Manage deployments → Web app → Copy. It ends in /exec.
+  // (Apps Script sometimes reports its test address, ending in /dev, which phones cannot use.)
+  var WEB_APP_URL = '';
+  var url = String(WEB_APP_URL || ScriptApp.getService().getUrl() || '').trim();
+  if (!WEB_APP_URL_RE.test(url)) {
+    Logger.log('NO LINK MADE. Apps Script gave this address: ' + (url || '(none)') + ' — phones need the Web app URL ending in /exec.');
+    Logger.log('Fix: Deploy → Manage deployments → copy the Web app URL, paste it between the quotes of WEB_APP_URL in showSetupLink, save, run showSetupLink again.');
+    return;
+  }
   var link = newSetupLink_();
-  Logger.log(APP_ADDRESS + '?backend=' + encodeURIComponent(ScriptApp.getService().getUrl()) + '&key=' + link.token);
+  Logger.log(APP_ADDRESS + '?backend=' + encodeURIComponent(url) + '&key=' + link.token);
   Logger.log('This link connects ONE phone, once, until ' + Utilities.formatDate(new Date(link.exp), TZ, 'yyyy-MM-dd HH:mm') + ' (Manila). Run showSetupLink again for the next phone.');
 }
+
+var WEB_APP_URL_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+\/|macros\/)s\/[\w-]+\/exec$/;
 
 /** Cancel every setup link not used yet. Phones already connected keep working. */
 function cancelSetupLinks() { Logger.log(purgeSetupLinks_(true) + ' unused setup link(s) cancelled.'); }

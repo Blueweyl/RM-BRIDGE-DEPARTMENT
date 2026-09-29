@@ -288,7 +288,7 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 246 backend checks, incl. adversarial cases
+node google-apps-script/test/backend.test.cjs      # 250 backend checks, incl. adversarial cases
 cd frontend && npm run test:e2e                     # 123 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake

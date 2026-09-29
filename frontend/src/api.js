@@ -8,7 +8,8 @@
 // Without a backend URL the app runs as the offline demo (browser storage only).
 
 const P = 'bnlex.live.';
-const URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/;
+// Apps Script web app URL (personal accounts: /macros/s/…/exec; Google Workspace: /a/macros/<domain>/s/…/exec).
+const URL_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+\/|macros\/)s\/[\w-]+\/exec$/;
 
 function get(k) {
   let v = null;

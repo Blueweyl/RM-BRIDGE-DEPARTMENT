@@ -58,8 +58,8 @@ Host it anywhere that serves plain files over **https**, for example:
 - **Netlify Drop**: drag the `frontend/dist` folder onto app.netlify.com/drop.
 
 ## 7. Make the setup link and send it to each phone
-1. In Apps Script, open `Code.gs`, find `showSetupLink`, and replace `https://YOUR-APP-ADDRESS/` with
-   your app address from step 6. Save.
+1. `showSetupLink` already points to `https://bridge-nlex-report.netlify.app/`. If you host the app
+   somewhere else, change `APP_ADDRESS` there and save.
 2. Choose **showSetupLink** → **Run** → **Execution log** shows a link like
    `https://your-app/?backend=https%3A%2F%2Fscript.google.com%2F…%2Fexec&key=abc123…`
 3. Send that link (Viber, Messenger, SMS) to each leadman and the admin. **Treat it like a password.**

@@ -193,7 +193,7 @@ function setup(options) {
 
 /** Print the setup link to send to phones. Run from the editor after deploying; paste your app address below. */
 function showSetupLink() {
-  var APP_ADDRESS = 'https://YOUR-APP-ADDRESS/';            // where frontend/dist is hosted
+  var APP_ADDRESS = 'https://bridge-nlex-report.netlify.app/';   // where the app is hosted (Netlify)
   var props = PropertiesService.getScriptProperties();
   if (Number(props.getProperty('SETUP_KEY_EXPIRES') || 0) < Date.now()) newSetupKey_();
   var url = ScriptApp.getService().getUrl();

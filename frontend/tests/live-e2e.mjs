@@ -133,7 +133,7 @@ try {
   await RL.page.waitForSelector('button[aria-label="Digit 1"]');
   ok('[P3] a setup link already used by another phone is refused (single use)', await waitText(RL.page, 'already used') && !(await ls(RL.page, 'bnlex.live.deviceKey')));
   await pin(RL.page, '2222');
-  ok('[P3] …and that phone cannot sign in', await waitText(RL.page, 'not set up yet'));
+  ok('[P3] …and that phone cannot sign in; the PIN screen shows why (not a generic message)', await waitText(RL.page, 'The setup link did not work: This setup link was already used'));
   await RL.ctx.close();
   ok('no prototype screen bar in live mode', await L.page.locator('nav').count() === 0);
   ok('no demo PINs shown in live mode', !(await text(L.page)).includes('Demo PINs'));

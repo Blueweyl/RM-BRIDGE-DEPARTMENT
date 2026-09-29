@@ -75,9 +75,10 @@ export async function enrollIfNeeded() {
   if (!eid || eid.k !== k) { eid = { k, id: uuid() }; put('enrollId', eid); }
   let j;
   try { j = await call('enroll', { setupKey: k, enrollId: eid.id, deviceLabel: (navigator.userAgent || '').slice(0, 60) }); }
-  catch (e) { if (e.notSetUp) { put('key', null); put('enrollId', null); } throw e; }   // a bad/used/expired link is not retried on every start
+  // A bad/used/expired link is not retried on every start; its reason is kept to show at sign-in.
+  catch (e) { if (e.notSetUp) { put('key', null); put('enrollId', null); put('enrollErr', e.message); } throw e; }
   put('deviceKey', j.deviceKey);
-  put('key', null); put('enrollId', null);
+  put('key', null); put('enrollId', null); put('enrollErr', null);
 }
 export function hasDevice() { return !!(get('deviceKey') || get('key')); }
 
@@ -163,7 +164,7 @@ export async function call(action, data = {}, { timeout = 45000 } = {}) {
 
 export async function login(pin) {
   await enrollIfNeeded();
-  if (!get('deviceKey')) throw new ApiError('This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
+  if (!get('deviceKey')) throw new ApiError(get('enrollErr') ? 'The setup link did not work: ' + get('enrollErr') : 'This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
   const j = await call('login', { pin, deviceKey: get('deviceKey') });
   if (!saveLocal('session', { token: j.token, user: j.user, expiresAt: j.expiresAt })) throw new ApiError('Phone storage is full — cannot stay signed in. Free up space and try again.');
   return j.user;

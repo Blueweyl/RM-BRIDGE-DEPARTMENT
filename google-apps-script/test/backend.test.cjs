@@ -536,6 +536,20 @@ B.env.setup({ pins: DEMO_PINS });
 const anyImage = Object.values(B.sheets).some(sh => sh.data.some(row => (row || []).some(v => /^=IMAGE\(/i.test(String(v == null ? '' : v)))));
 ok('[P1] setup() rewrites old =IMAGE photo cells in every tab as private links', !anyImage);
 
+// Speed: a first attendance submit writes the whole crew in one Sheets call (phones were timing out)
+const W = makeBackend(); W.env.setup({ pins: DEMO_PINS });
+const w1 = W.call({ action: 'login', pin: '1111', device: 'speed' });
+const wRoster = W.call({ action: 'load', token: w1.token }).roster.filter(m => m.status === 'Active');
+const w0 = W.writes.Attendance || 0;
+r = W.call({ action: 'saveAttendance', token: w1.token, teamId: 'team1', reportDate: W.env.today_(), baseRev: '0', people: wRoster.map(m => ({ personId: m.personId, status: 'Present' })) });
+ok('first attendance submit: whole crew written with ONE Sheets call, all rows correct', r.ok && (W.writes.Attendance - w0) === 1 && W.env.readAll_('Attendance').filter(a => a.teamId === 'team1' && a.status === 'Present' && a.rev === r.rev).length === wRoster.length, (W.writes.Attendance - w0) + ' writes');
+W.env.CACHE = {};
+ok('…and the rows read back from the Sheet match (cache and Sheet agree)', W.env.readAll_('Attendance').filter(a => a.teamId === 'team1').length === wRoster.length && W.env.readAll_('Attendance').every(a => /^\d{4}-/.test(a.createdAt)));
+const wAtt = W.env.readAll_('Attendance').filter(a => a.teamId === 'team1');
+r = W.call({ action: 'saveAttendance', token: w1.token, teamId: 'team1', reportDate: W.env.today_(), baseRev: r.rev, reason: 'Justin went home', people: wRoster.map(m => ({ personId: m.personId, status: m.name === 'Justin Billones' ? 'Sick' : 'Present' })) });
+W.env.CACHE = {};
+ok('changing submitted attendance still updates the existing rows (no duplicates)', r.ok && W.env.readAll_('Attendance').filter(a => a.teamId === 'team1').length === wAtt.length && W.env.readAll_('Attendance').find(a => a.name === 'Justin Billones').status === 'Sick', JSON.stringify(r));
+
 // ── Upgrade an old (v1) Sheet in place ──────────────────────────────────
 const M = makeBackend({ code: require('path').join(__dirname, 'fixtures', 'Code-v1.gs') });
 M.env.setup({ demoPins: true });   // the old v1 code has its own test option

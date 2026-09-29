@@ -41,7 +41,7 @@ npm install
 npm run dev            # local dev server (demo mode)
 npm run build          # production files → frontend/dist/ (no demo data)
 npm run build:demo     # offline demo build (fixed demo PINs), for training / the standalone HTML
-npm run test:backend   # 250 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts, private photos, setup-link replay, device revocation, audit truncation)
+npm run test:backend   # 253 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts, private photos, setup-link replay, device revocation, audit truncation)
 npm run test:e2e       # 123 end-to-end checks: leadman phones + admin computer against the real backend code
 ```
 

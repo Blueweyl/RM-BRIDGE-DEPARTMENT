@@ -12,7 +12,7 @@ function makeBackend(opts = {}) {
   const codePath = opts.code || path.join(__dirname, '..', 'Code.gs');
   const sheets = {}, files = {}, props = {}, cache = {}, exports_ = {};
   let seq = 0;
-  const clock = { offsetDays: 0 }, logs = [], service = { url: 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' };
+  const clock = { offsetDays: 0 }, writes = {}, logs = [], service = { url: 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' };
   const cellStr = v => (v == null ? '' : String(v));
   class Range {
     constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr: nr || 1, nc: nc || 1 }); }
@@ -21,7 +21,7 @@ function makeBackend(opts = {}) {
     getDisplayValues() { return this.grid(v => { v = cellStr(v); if (v[0] === '=') return ''; if (v[0] === "'") return v.slice(1); return v; }); }
     getFormulas() { return this.grid(v => { v = cellStr(v); return v[0] === '=' ? v : ''; }); }
     put(i, j, v) { if (this.r + i > this.sh.maxRows) throw new Error('Range out of bounds'); while (this.sh.data.length < this.r + i) this.sh.data.push([]); this.sh.data[this.r - 1 + i][this.c - 1 + j] = v; }
-    setValues(vs) { if (vs.length !== this.nr || vs[0].length !== this.nc) throw new Error('setValues size mismatch'); vs.forEach((row, i) => row.forEach((v, j) => this.put(i, j, v))); return this; }
+    setValues(vs) { if (vs.length !== this.nr || vs[0].length !== this.nc) throw new Error('setValues size mismatch'); writes[this.sh.name] = (writes[this.sh.name] || 0) + 1; vs.forEach((row, i) => row.forEach((v, j) => this.put(i, j, v))); return this; }
     setNumberFormats() { return this; } setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
     setValue(v) { this.put(0, 0, v); return this; } setNumberFormat() { return this; } merge() { return this; } setFontSize() { return this; } setHorizontalAlignment() { return this; }
     setVerticalAlignment() { return this; } setWrap() { return this; } clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) if (this.at(i, j) !== undefined) this.put(i, j, ''); return this; }
@@ -87,6 +87,6 @@ function makeBackend(opts = {}) {
     if (body.action === 'login' && out.ok) tokenDevice[out.token] = body.deviceKey;
     return out;
   };
-  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_, logs, service };
+  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_, logs, service, writes };
 }
 module.exports = { makeBackend };

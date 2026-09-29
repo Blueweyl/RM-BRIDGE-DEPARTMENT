@@ -904,13 +904,14 @@ function saveAttendance_(s, req) {
   var now = now_(), by = s.user.name;
   if (hadAttendance) revision_(s, rep, 'attendance before update', reason);
   var rev = String(Number(rep.rev || 0) + 1);
-  rows.forEach(function (r) {
+  // One write for the whole crew (a Sheets call per person made a first submit slow enough for phones to time out).
+  upsertMany_('Attendance', rows.map(function (r) {
     var k = key + '|' + r.m.personId;
-    upsert_('Attendance', k, {
+    return { key: k, data: {
       key: k, reportId: rep.reportId, reportDate: date, teamId: teamId, personId: r.m.personId, name: r.m.name, role: r.m.role,
       status: r.status, note: r.note, submittedAt: now, submittedBy: by, updatedAt: now, rev: rev,
-    }, { createdAt: now });
-  });
+    }, defaults: { createdAt: now } };
+  }));
   var present = rows.filter(function (r) { return r.status === 'Present'; }).length;
   var absentList = rows.filter(function (r) { return r.status !== 'Present'; }).map(function (r) { return r.m.name + ' (' + r.status + (r.note ? ': ' + r.note : '') + ')'; }).join('; ');
   upsert_('DailyReports', key, {
@@ -1874,6 +1875,35 @@ function upsert_(name, key, data, defaults) {
   if (isNew) { CACHE[name].index[key] = CACHE[name].rows.length; CACHE[name].rows.push(stored); }
   else CACHE[name].rows[i] = stored;
   return rowNum;
+}
+
+/**
+ * upsert_ for many rows: existing rows are updated one by one (as upsert_), new rows are appended with a
+ * single format + write call. `list`: [{ key, data, defaults }].
+ */
+function upsertMany_(name, list) {
+  readAll_(name);
+  var has = function (o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined; };
+  var fresh = list.filter(function (x) { return CACHE[name].index[x.key] == null; });
+  list.forEach(function (x) { if (CACHE[name].index[x.key] != null) upsert_(name, x.key, x.data, x.defaults); });
+  if (!fresh.length) return;
+  var sh = sheet_(name), cols = TABLES[name], kf = KEY_FIELD[name];
+  var first = CACHE[name].rows.length + 2, last = first + fresh.length - 1;
+  if (last > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), Math.max(500, last - sh.getMaxRows()));
+  formatRows_(sh, name, first, fresh.length);
+  var merged = fresh.map(function (x) {
+    var m = {};
+    cols.forEach(function (c) { var k = c[0]; m[k] = k === kf ? x.key : has(x.data, k) ? x.data[k] : has(x.defaults, k) ? x.defaults[k] : ''; });
+    return m;
+  });
+  sh.getRange(first, 1, merged.length, cols.length).setValues(merged.map(function (m) {
+    return cols.map(function (c) { var v = m[c[0]] == null ? '' : String(m[c[0]]); return FORMULA_FIELDS[c[0]] ? v : safeCell_(v); });
+  }));
+  merged.forEach(function (m) {
+    var stored = {};
+    cols.forEach(function (c) { stored[c[0]] = FORMULA_FIELDS[c[0]] ? '' : String(m[c[0]] == null ? '' : m[c[0]]); });
+    CACHE[name].index[m[kf]] = CACHE[name].rows.length; CACHE[name].rows.push(stored);
+  });
 }
 
 function deleteRow_(name, key) {

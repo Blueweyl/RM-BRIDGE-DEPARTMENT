@@ -37,6 +37,8 @@ const KINDS = { att: 'Attendance', act: 'Report' };
 const STATES = ['pending', 'syncing', 'conflict', 'rejected'];
 const KEY_RE = /^(att|act)\|[\w-]+\|\d{4}-\d{2}-\d{2}$/;
 const MAX_UPLOAD = 5.5 * 1024 * 1024;
+// Saves can take a while on Google's side (script lock, Sheet writes): wait this long before calling one unconfirmed.
+const WRITE_TIMEOUT = 120000;
 
 export const liveMethods = {
   liveUser(u) {
@@ -227,7 +229,7 @@ export const liveMethods = {
           body = { report: it.payload.report, beforePhotoId: idOf('before', 'photoId'), beforeClientId: idOf('before', 'clientId'), afterPhotoId: idOf('after', 'photoId'), afterClientId: idOf('after', 'clientId') };
         }
         sentNow = true;
-        const r = await api.call(action, { teamId: it.teamId, reportDate: it.date, ...body, baseRev: it.baseRev, requestId: it.reqId });
+        const r = await api.call(action, { teamId: it.teamId, reportDate: it.date, ...body, baseRev: it.baseRev, requestId: it.reqId }, { timeout: WRITE_TIMEOUT });
         this.confirmItem(key, it, r);
       } catch (e) {
         this.failItem(key, { ...it, sent: it.sent || (sentNow && !e.notSent) }, e, manual);
@@ -742,7 +744,7 @@ export const liveMethods = {
     this._inflight = true;
     this.setState({ busy: 'edit' });
     try {
-      const r = await api.call('reopenReport', { teamId: id, reportDate: s.today, reason, baseRev: from, requestId: this.reqId(rk) });
+      const r = await api.call('reopenReport', { teamId: id, reportDate: s.today, reason, baseRev: from, requestId: this.reqId(rk) }, { timeout: WRITE_TIMEOUT });
       this.doneReq(rk);
       this.baseSet('act|' + id + '|' + s.today, r.rev);
       this.bumpBase(id, s.today, from, r.rev);

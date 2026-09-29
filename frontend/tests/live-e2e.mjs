@@ -431,7 +431,7 @@ try {
   calls.submitReport = 0;
   faults.submitReport = 'hang';
   await click(G4.page, 'Submit report');
-  ok('timeout: after 45 s with no answer the phone says NOT confirmed, keeps it Pending sync', await waitText(G4.page, 'did not answer in time', 60000) && (await text(G4.page)).includes('Report: Pending sync') && !(await text(G4.page)).includes('Report submitted at'));
+  ok('timeout: after 120 s with no answer the phone says NOT confirmed, keeps it Pending sync', await waitText(G4.page, 'did not answer in time', 140000) && (await text(G4.page)).includes('Report: Pending sync') && !(await text(G4.page)).includes('Report submitted at'));
   ok('…the server had in fact saved it once', report('team4').state === 'submitted' && report('team4').version === '1');
   await G4.page.getByRole('button', { name: 'Send now' }).click();
   ok('re-send after the timeout is recognised: confirmed, still version 1 (no duplicate)', await waitText(G4.page, 'Report submitted at', 15000) && report('team4').version === '1' && calls.submitReport === 2);

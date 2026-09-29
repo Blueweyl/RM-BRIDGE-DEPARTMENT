@@ -593,7 +593,7 @@ export default class Component extends React.Component {
         const warn = p && (p.lost || p.rejected || (p.pending && p.error));
         return { label: k === 'before' ? 'Before Work' : 'After Work', hint: k === 'before' ? 'Take before the crew starts' : 'Take when work is finished',
           empty: !p, filled: !!p, hasUrl: !!(p && p.url), noUrl: !!(p && !p.url), previewStyle: p && p.url ? `position:absolute;inset:0;background:url("${p.url}") center/cover no-repeat;` : '', name: p ? p.name : '', time: p ? p.time : '',
-          reqLabel: p ? (p.lost ? 'Missing — retake' : p.rejected ? 'Refused — retake' : p.pending ? (p.error ? 'Upload failed · retrying' : 'Not uploaded yet') : 'Uploaded') : (req ? 'Required' : 'Optional'),
+          reqLabel: p ? (p.lost ? 'Missing — retake' : p.rejected ? 'Refused — retake' : p.pending ? (p.error ? 'Upload failed · retrying' : 'Not uploaded yet') : (this.live ? 'Uploaded' : 'Saved on this device')) : (req ? 'Required' : 'Optional'),
           reqStyle: `font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;${warn ? 'background:#FBE0DD;color:#A8261B;' : p && p.pending ? 'background:#FDEBD3;color:#8A4B00;' : p ? 'background:#DDF2E6;color:#17693F;' : req ? 'background:#FBE0DD;color:#A8261B;' : 'background:#E3E7EC;color:#33404F;'}`,
           errorText: p && p.pending && (p.rejected || p.error) || '', hasError: !!(p && p.pending && (p.rejected || p.error)),
           dropStyle: `height:196px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:10px;${locked ? 'cursor:not-allowed;opacity:0.55;' : 'cursor:pointer;'}${b ? 'border:2px dashed #C62828;background:#FFF6F5;' : 'border:2px dashed #8795A8;background:#F7F8FA;'}`,

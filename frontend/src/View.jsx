@@ -399,7 +399,7 @@ function ActivityTab({ cur }) {
             <label style={css(LABEL)}>Quick activity template
               <select aria-label="Quick activity template" value="" onChange={cur.onTemplate} style={css('width:100%;min-height:48px;padding:0 10px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;')}>
                 <option value="">Choose a template (you can edit it after)…</option>
-                {cur.templates.map(tp => <option key={tp} value={tp}>{tp}</option>)}
+                {cur.templates.map((tp, i) => <option key={tp} value={tp}>{i + 1}. {tp}</option>)}
               </select>
             </label>
             <label style={css(LABEL)}>Activity details

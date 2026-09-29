@@ -186,10 +186,10 @@ try {
   await L.page.getByRole('tab', { name: /Activity/ }).click();
   const tpl = L.page.locator('select[aria-label="Quick activity template"]');
   ok('quick activity template: 10 templates for the team', await tpl.locator('option').count() === 11);
-  await tpl.selectOption('Desilting of scupper drains and downspouts');
-  ok('…picking one fills Activity details (still editable)', await L.page.inputValue('textarea[placeholder^="What did"]') === 'Desilting of scupper drains and downspouts' && await L.page.locator('textarea[placeholder^="What did"]').isEditable());
-  await tpl.selectOption('Cleaning of clogged scupper drain');
-  ok('…a second pick asks, then replaces the text', await L.page.inputValue('textarea[placeholder^="What did"]') === 'Cleaning of clogged scupper drain');
+  await tpl.selectOption('Removal of accumulated silt from scupper drains');
+  ok('…picking one fills Activity details (still editable)', await L.page.inputValue('textarea[placeholder^="What did"]') === 'Removal of accumulated silt from scupper drains' && await L.page.locator('textarea[placeholder^="What did"]').isEditable());
+  await tpl.selectOption('Cleaning of clogged scupper drains');
+  ok('…a second pick asks, then replaces the text', await L.page.inputValue('textarea[placeholder^="What did"]') === 'Cleaning of clogged scupper drains');
   await fillForm(L.page, 'Km.11+000 to km.10+020 C3 exit ramp');
   await L.page.fill('label:has-text("Actual manpower") input', '9');
   await click(L.page, 'Complete');

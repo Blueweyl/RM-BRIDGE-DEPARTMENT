@@ -22,7 +22,9 @@ const BACKEND = 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec';
 
 const B = makeBackend();
 B.env.setup({ pins: ['0000', '1111', '2222', '3333', '4444'] });   // fixed PINs for the test (admin, team1..team4)
-const SETUP = () => APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + B.props.SETUP_KEY;
+// Each phone gets its own single-use setup link (as showSetupLink() prints).
+let lastLink = '';
+const SETUP = () => { lastLink = B.env.newSetupLink_().token; return APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + lastLink; };
 
 // Per-action call counts, and one-shot faults: 'fail' (network error, nothing reaches the server)
 // or 'drop' (server commits, the answer never reaches the phone).
@@ -125,6 +127,14 @@ try {
   ok('setup link removed from address bar', !L.page.url().includes('backend=') && !L.page.url().includes('key='));
   await L.page.waitForFunction(() => !!localStorage.getItem('bnlex.live.deviceKey'), null, { timeout: 5000 }).catch(() => {});
   ok('setup key exchanged for a device key, then deleted from the phone', !!(await ls(L.page, 'bnlex.live.deviceKey')) && !(await ls(L.page, 'bnlex.live.key')));
+  const usedLink = lastLink;
+  const RL = await device({ width: 390, height: 844 });
+  await RL.page.goto(APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + usedLink);
+  await RL.page.waitForSelector('button[aria-label="Digit 1"]');
+  ok('[P3] a setup link already used by another phone is refused (single use)', await waitText(RL.page, 'already used') && !(await ls(RL.page, 'bnlex.live.deviceKey')));
+  await pin(RL.page, '2222');
+  ok('[P3] …and that phone cannot sign in', await waitText(RL.page, 'not set up yet'));
+  await RL.ctx.close();
   ok('no prototype screen bar in live mode', await L.page.locator('nav').count() === 0);
   ok('no demo PINs shown in live mode', !(await text(L.page)).includes('Demo PINs'));
 
@@ -134,7 +144,7 @@ try {
   await pin(L.page, '2222');
   ok('PIN 2222 accepted by server → Glenn Butiong', await waitText(L.page, 'Glenn Butiong') && (await text(L.page)).includes('PIN accepted'));
   await click(L.page, "Start today's report");
-  ok('opens Segment 10 screen', await waitText(L.page, 'Leadman · Segment 10 Scupper Drain'));
+  ok('opens Segment 10 screen', await waitText(L.page, 'Leadman · Segment 10 Scupper Drain'), (await text(L.page)).slice(0, 600) + ' ERR ' + L.page.errors.join(' / '));
   await L.page.waitForTimeout(500);
   ok('no demo data seeded (location empty)', await L.page.inputValue('input[placeholder^="e.g. CANDABA"]') === '');
 
@@ -292,7 +302,8 @@ try {
   ok('[14] unconfirmed record (with its request ID) remembered across reloads', (await ls(E.page, 'bnlex.live.outbox') || '').includes('act|team3'));
   await E.page.reload();
   ok('[14] after reload the phone shows the server truth: submitted', await waitText(E.page, 'Report submitted at', 10000));
-  ok('[4][14] no duplicate: still version 1, record cleared', report('team3').version === '1' && !(await ls(E.page, 'bnlex.live.outbox') || '').includes('act|team3'));
+  // The re-send (same request ID) that clears the record runs alongside the reload's other calls (e.g. photo previews).
+  ok('[4][14] no duplicate: still version 1, record cleared', await until(async () => !(await ls(E.page, 'bnlex.live.outbox') || '').includes('act|team3'), 10000) && report('team3').version === '1');
 
   // ── Epoxy 2 phone queues attendance offline; the admin archives a crew member meanwhile ──
   const adminTok = B.call({ action: 'login', pin: '0000', device: 'test-admin' }).token;
@@ -313,6 +324,15 @@ try {
   ok('sync-state box fits a 320px phone (no sideways scroll)', await G4.page.evaluate(() => document.documentElement.scrollWidth <= 320));
   await G4.page.setViewportSize({ width: 390, height: 844 });
   ok('phone reports its refused record to the server', /rejected/.test((B.cache['queue:team4'] || {}).v || ''));
+
+  // ── Private photos: previews come through the signed-in API ────────────
+  ok('[P1] every photo file in Drive is private', Object.keys(B.files).length > 0 && Object.values(B.files).every(f => f.access === 'private'));
+  calls.photoView = 0;
+  await L.page.reload();
+  await L.page.getByRole('tab', { name: /Activity/ }).click().catch(() => {});
+  const dataPreview = () => L.page.evaluate(() => [...document.querySelectorAll('div')].some(e => /url\("data:image\/jpeg/.test(e.getAttribute('style') || '')));
+  ok('[P1] after a reload the uploaded photo preview is fetched through the signed-in API', await until(dataPreview, 15000) && calls.photoView >= 1, calls.photoView);
+  ok('[P1] no public Drive thumbnail/link is used for previews', !(await L.page.content()).includes('drive.google.com/thumbnail'));
 
   // ── Admin computer ──────────────────────────────────────────────────────
   const A = await device({ width: 1280, height: 900 });
@@ -342,6 +362,30 @@ try {
   ok('revision history viewer shows the reopen reason', await waitText(A.page, 'Wrong chainage typed'));
   await click(A.page, 'Audit log');
   ok('audit log viewer shows denied attempts', await waitText(A.page, 'DENIED'));
+
+  // [P4] Disconnect one lost phone from the admin screen
+  const P = await signIn('4444', 'Bridge Epoxy 2');
+  const pDev = B.env.unsign_(JSON.parse(await ls(P.page, 'bnlex.live.deviceKey')), 'DEVICE_SECRET').d;
+  await click(A.page, 'Phones');
+  ok('[P4] admin Phones list shows connected phones and who used them', await waitText(A.page, 'connected ·') && (await text(A.page)).includes(pDev) && (await text(A.page)).includes('Gilbert Rivera'));
+  A.page.onDialog = d => d.accept('Phone lost on site');
+  await A.page.getByRole('row').filter({ hasText: pDev }).getByRole('button', { name: /Disconnect/ }).click();
+  ok('[P4] admin disconnects that one phone (reason asked, audited)', await waitText(A.page, 'Phone disconnected') && B.env.readAll_('AuditLog').some(a => a.action === 'device disconnected' && a.entityId === pDev && a.reason === 'Phone lost on site'));
+  A.page.onDialog = null;
+  ok('[P4] the list shows it disconnected', await waitText(A.page, 'Disconnected '));
+  await P.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('[P4] the disconnected phone is signed out and loses its device key', await waitText(P.page, 'disconnected by the admin', 15000) && !(await ls(P.page, 'bnlex.live.deviceKey')));
+  const g4s = JSON.parse(await ls(G4.page, 'bnlex.live.session')), g4k = JSON.parse(await ls(G4.page, 'bnlex.live.deviceKey'));
+  ok('[P4] the same leadman\'s other phone keeps working (PIN unchanged)', B.raw({ action: 'load', token: g4s.token, deviceKey: g4k }).ok);
+  await P.ctx.close();
+
+  // [P5] Audit rows deleted from the end → warning on the admin screen
+  const AL = B.sheets.AuditLog;
+  AL.data.splice(AL.getLastRow() - 2, 2); B.env.CACHE = {};
+  B.call({ action: 'login', pin: '0000', device: 'test-admin' });
+  await A.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  ok('[P5] admin screen warns that audit entries were deleted', await waitText(A.page, 'Audit log tampering detected', 15000) && !B.env.verifyAuditLog().ok);
+  B.env.resetAuditCheckpoint();
 
   // Admin edits roster; the phone picks it up on refresh.
   await A.page.getByRole('button', { name: /Segment 10 Scupper Drain/ }).first().click();

@@ -42,7 +42,7 @@ at once, signs that person out on every phone, and is replaced by its hash at th
 ## 5. Publish the backend
 1. In the Apps Script editor: **Deploy → New deployment** → gear icon → **Web app**.
 2. **Execute as: Me**. **Who has access: Anyone**. (Phones call it without a Google sign-in;
-   the setup key and PINs protect it.)
+   the single-use setup links, device keys and PINs protect it.)
 3. **Deploy** → copy the **Web app URL** (it ends in `/exec`).
 
 After changing the code later, use **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**.
@@ -62,18 +62,22 @@ Host it anywhere that serves plain files over **https**, for example:
    somewhere else, change `APP_ADDRESS` there and save.
 2. Choose **showSetupLink** → **Run** → **Execution log** shows a link like
    `https://your-app/?backend=https%3A%2F%2Fscript.google.com%2F…%2Fexec&key=abc123…`
-3. Send that link (Viber, Messenger, SMS) to each leadman and the admin. **Treat it like a password.**
-   It can connect new phones for **7 days**; run **showSetupLink** again for a fresh one. Each phone
-   swaps the link for its own device key the first time, and then forgets the link.
+3. Send that link (Viber, Messenger, SMS) to **one** person. **Each link connects ONE phone, once,
+   within 24 hours** — run **showSetupLink** again for the next phone. The phone swaps the link for its
+   own device key the first time and forgets it; if the link is forwarded or reused afterwards it is
+   refused (and shows in the audit log). Phones connected before this version keep working.
 4. On the phone: open the link → sign in with the PIN → browser menu → **Add to Home screen**.
    From then on, open the app from the home-screen icon. It works without signal.
 
 ## Day-to-day admin
 | Task | How |
 |---|---|
-| Lost phone / someone left | Type a new PIN in the Users tab, or set Active = No (signs them out everywhere) |
+| Lost or stolen phone | App → Admin → **Phones** → **Disconnect** that phone (give a reason). It is signed out and cannot sign in again; the PIN and the person's other phones keep working |
+| Someone left | Type a new PIN in the Users tab, or set Active = No (signs them out everywhere) |
 | Sign out every device | Apps Script → run **signOutEveryone** |
-| Setup link was leaked | Apps Script → run **newSetupKey** and send the new link. Phones already connected keep working. |
+| Setup link was leaked | If it was not used yet: run **cancelSetupLinks** (all unused links stop working) and send a new one. If someone else used it first, their phone appears under Admin → **Phones**: disconnect it. |
+| Photos | Private in Drive (not shared by link). The app shows them to signed-in users of that team and the admin; the Sheet has "Before photo / After photo" links that open for the Drive owner. Run **makePhotosPrivate** if setup says some are still shared |
+| "Audit log tampering detected" | Run **verifyAuditLog** (log shows what changed). After checking, run **resetAuditCheckpoint** |
 | A phone may be compromised | Run **forgetAllPhones**: every phone needs a new setup link |
 | "Too many wrong PINs" for everyone | Wait 15 minutes, or run **clearLoginLock**. Check the AuditLog tab for who tried. |
 | Change a leadman | Users tab: change the name and type a new PIN. Add the new person in the app (Admin → team → Add to crew). |

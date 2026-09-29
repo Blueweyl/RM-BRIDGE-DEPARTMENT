@@ -43,37 +43,38 @@ function makeBackend(opts = {}) {
   const folders = {};
   const mkFolder = name => { const id = 'folder' + (++seq); const f = { id, name, subs: {}, getId: () => id,
     getFoldersByName: n => ({ hasNext: () => !!f.subs[n], next: () => f.subs[n] }), createFolder: n => (f.subs[n] = mkFolder(n)),
-    createFile: blob => { const fid = 'file' + (++seq); const file = files[fid] = { id: fid, folder: f, blob, shared: false, getId: () => fid, setSharing() { file.shared = true; }, setDescription(d) { file.description = d; } }; return file; } };
+    createFile: blob => { const fid = 'file' + (++seq); const file = files[fid] = { id: fid, folder: f, blob, access: 'private', getId: () => fid, setSharing(a) { file.access = a; }, setDescription(d) { file.description = d; },
+      getBlob: () => ({ getBytes: () => blob.bytes, getContentType: () => blob.type }) }; return file; } };
     folders[id] = f; return f; };
   const roots = {};
   const env = {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss,
       create: name => { const id = 'xsheet' + (++seq); const sh = new Sheet('Sheet1'); const x = exports_[id] = { id, name, sheet: sh, getId: () => id, getSheets: () => [sh] }; return x; } },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperties: () => ({ ...props }), getProperty: k => props[k] || null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: k => (cache[k] && cache[k].exp > Date.now() ? cache[k].v : null), put: (k, v, s) => { cache[k] = { v, exp: Date.now() + s * 1000 }; }, remove: k => { delete cache[k]; } }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     Utilities: {
       getUuid: () => crypto.randomUUID(),
       formatDate: (d, tz, p) => fmtDate(new Date(d.getTime() + clock.offsetDays * 86400000), tz, p),
-      base64Decode: s => [...Buffer.from(s, 'base64')], base64EncodeWebSafe: b => Buffer.from(typeof b === 'string' ? b : Uint8Array.from(b)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
+      base64Decode: s => [...Buffer.from(s, 'base64')], base64Encode: b => Buffer.from(Uint8Array.from(b)).toString('base64'), base64EncodeWebSafe: b => Buffer.from(typeof b === 'string' ? b : Uint8Array.from(b)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       base64DecodeWebSafe: s => [...Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64')],
       computeHmacSha256Signature: (v, k) => [...crypto.createHmac('sha256', k).update(v).digest()],
       newBlob: (b, t, n) => ({ bytes: b, type: t, name: n, getDataAsString: () => Buffer.from(b).toString('utf8') }),
     },
-    DriveApp: { Access: { ANYONE_WITH_LINK: 1 }, Permission: { VIEW: 1 },
+    DriveApp: { Access: { ANYONE_WITH_LINK: 'anyone-with-link', PRIVATE: 'private' }, Permission: { VIEW: 'view', NONE: 'none' },
       getFolderById: id => { if (!folders[id]) throw new Error('not found'); return folders[id]; },
       getFoldersByName: n => ({ hasNext: () => !!roots[n], next: () => roots[n] }), createFolder: n => (roots[n] = mkFolder(n)),
-      getFileById: id => ({ moveTo: f => { if (exports_[id]) exports_[id].folder = f; } }) },
+      getFileById: id => { if (files[id]) return files[id]; if (exports_[id]) return { moveTo: f => { exports_[id].folder = f; } }; throw new Error('File not found: ' + id); } },
     ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST-DEPLOYMENT/exec' }) },
     Logger: { log() {} }, console, Date, JSON, Math, Object, String, Number, Array, Error, RegExp, Buffer,
   };
   vm.createContext(env);
   vm.runInContext(fs.readFileSync(codePath, 'utf8'), env);
   const raw = body => JSON.parse(env.doPost({ postData: { contents: JSON.stringify(body) } }).s);
-  // Test helper: a login without a deviceKey enrols `body.device` once with the real setup key.
+  // Test helper: a login without a deviceKey enrols `body.device` once, with its own single-use setup link.
   const devices = {};
-  const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: props.SETUP_KEY, deviceLabel: name }).deviceKey);
+  const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: env.newSetupLink_ ? env.newSetupLink_().token : props.SETUP_KEY, enrollId: 'test-' + name + '-0000', deviceLabel: name }).deviceKey);
   // Test helper: a token is sent with the device key of the phone that signed in (as the app does),
   // and writes that need one get a fresh request ID unless the test sets its own.
   const tokenDevice = {};

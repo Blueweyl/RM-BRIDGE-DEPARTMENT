@@ -2,8 +2,8 @@
 //
 // "Live" mode is on when a backend URL is configured, either at build time
 // (VITE_BACKEND_URL in frontend/.env) or once per phone with a setup link:
-//   https://<app address>/?backend=<Apps Script web app URL>&key=<setup key>
-// The setup key (from the backend's showSetupLink()) is never built into the app. It is
+//   https://<app address>/?backend=<Apps Script web app URL>&key=<single-use setup link token>
+// The link (from the backend's showSetupLink(), one per phone) is never built into the app. It is
 // exchanged once for a signed per-phone device key and then deleted from the phone.
 // Without a backend URL the app runs as the offline demo (browser storage only).
 
@@ -64,15 +64,20 @@ export function uuid() {
   return [...b].map((x, i) => ([4, 6, 8, 10].includes(i) ? '-' : '') + x.toString(16).padStart(2, '0')).join('');
 }
 
-/** A phone opened with a setup link swaps the setup key for its own device key, then forgets the setup key. */
+/**
+ * A phone opened with a setup link swaps it for its own device key, then forgets the link. Links work once:
+ * the phone's random enrolment ID lets it retry after a lost reply and still get its key.
+ */
 export async function enrollIfNeeded() {
   const k = get('key');
   if (!k || get('deviceKey') || !isLive()) return;
+  let eid = get('enrollId');
+  if (!eid || eid.k !== k) { eid = { k, id: uuid() }; put('enrollId', eid); }
   let j;
-  try { j = await call('enroll', { setupKey: k, deviceLabel: (navigator.userAgent || '').slice(0, 60) }); }
-  catch (e) { if (e.notSetUp) put('key', null); throw e; }   // a bad/expired link is not retried on every start
+  try { j = await call('enroll', { setupKey: k, enrollId: eid.id, deviceLabel: (navigator.userAgent || '').slice(0, 60) }); }
+  catch (e) { if (e.notSetUp) { put('key', null); put('enrollId', null); } throw e; }   // a bad/used/expired link is not retried on every start
   put('deviceKey', j.deviceKey);
-  put('key', null);
+  put('key', null); put('enrollId', null);
 }
 export function hasDevice() { return !!(get('deviceKey') || get('key')); }
 

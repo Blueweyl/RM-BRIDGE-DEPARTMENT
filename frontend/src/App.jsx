@@ -424,7 +424,7 @@ export default class Component extends React.Component {
     const setRange = k => e => { const v = e.target.value; this.setState(st => ({ adminRange: { ...st.adminRange, [k]: v } })); };
     const chip = (bg, fg) => `display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap;background:${bg};color:${fg};`;
     const stateChip = { Submitted: chip('#DDF2E6', '#17693F'), Draft: chip('#E3E9F2', '#2B4A73'), Missing: chip('#FBE0DD', '#A8261B') };
-    const rep = d.reports, rev = d.revisions, aud = d.audit;
+    const rep = d.reports, rev = d.revisions, aud = d.audit, devs = d.devices;
     const reportRows = rep && s.adminView === 'reports' ? rep.rows.filter(r => s.adminTab === 'all' || r.teamId === s.adminTab).map(r => ({
       key: r.teamId + r.reportDate, date: this.fmtDate(r.reportDate, true), team: r.team, leadman: r.leadman, state: r.state, stateStyle: stateChip[r.state],
       late: r.late, lateLabel: r.state === 'Submitted' ? 'Late' : 'Overdue', lateStyle: chip('#FDEBD3', '#8A4B00'),
@@ -453,6 +453,13 @@ export default class Component extends React.Component {
       reportRows, reportsSummary: rep ? `${rep.from} to ${rep.to} · ${missingN} missing/overdue · ${lateN} submitted late` : '',
       hasRevisions: !!(rev && rev.reportId), revisionsTitle: rev ? `Revision history · ${rev.reportId}` : '', revisions, noRevisions: !!(rev && rev.revisions && !rev.revisions.length),
       closeRevisions: () => this.setState(st => ({ adminData: { ...st.adminData, revisions: null } })),
+      showDevices: () => this.liveDevices(), devicesLabel: s.busy === 'devices' ? 'Loading…' : 'Phones',
+      onDevices: s.adminView === 'devices' && !!devs,
+      deviceRows: devs && s.adminView === 'devices' ? devs.devices.map(x => ({ key: x.deviceId, label: x.label || '—', id: x.deviceId, enrolled: x.enrolledAt || '—',
+        last: x.lastUser ? `${x.lastUser} · ${x.lastSignIn}` : 'Never signed in', active: x.activeSessions,
+        status: x.revokedAt ? `Disconnected ${x.revokedAt} by ${x.revokedBy}${x.revokedReason ? ' — ' + x.revokedReason : ''}` : x.thisDevice ? 'This device' : 'Connected',
+        revoked: !!x.revokedAt, canRevoke: !x.revokedAt && !x.thisDevice, revoke: () => this.liveRevokeDevice(x) })) : [],
+      devicesSummary: devs ? `${devs.devices.filter(x => !x.revokedAt).length} connected · ${devs.devices.filter(x => x.revokedAt).length} disconnected` : '',
       auditRows, auditSummary: aud ? `${aud.from} to ${aud.to}${s.adminTab !== 'all' ? ' · ' + s.adminTab : ''} · showing ${aud.rows.length} of ${aud.total}` : '',
     };
   }
@@ -555,7 +562,8 @@ export default class Component extends React.Component {
       exportLabel: s.busy === 'export' ? 'Exporting…' : 'Export CSV (Excel)',
       storageStyle: `font-size:13px;font-weight:700;${(s.storagePct || 0) >= 70 ? 'color:#A8261B;' : 'color:#33404F;'}`,
       tools: this.live ? this.adminTools(s) : null, hasTools: this.live,
-      auditWarn: af && af.count ? `${af.count} audit log entr${af.count === 1 ? 'y' : 'ies'} could not be written (last ${af.last}: ${af.error}). Check the AuditLog tab, then run clearAuditFailures() in Apps Script.` : '',
+      auditWarn: [af && af.tamper ? `Audit log tampering detected: ${af.tamper}. Check the AuditLog tab and Apps Script → verifyAuditLog, then run resetAuditCheckpoint().` : '',
+        af && af.count ? `${af.count} audit log entr${af.count === 1 ? 'y' : 'ies'} could not be written (last ${af.last}: ${af.error}). Check the AuditLog tab, then run clearAuditFailures() in Apps Script.` : ''].filter(Boolean).join(' '),
       showReset: this.demo,
     };
 

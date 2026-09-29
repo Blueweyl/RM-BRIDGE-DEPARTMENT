@@ -289,6 +289,7 @@ function AdminTools({ t }) {
         <label style={css(LABEL)}>To<input type="date" aria-label="To date" value={t.to} max={t.max} onChange={t.onTo} style={css(DATE_INPUT)} /></label>
         <button onClick={t.showReports} style={css(TOOL_BTN)}>{t.reportsLabel}</button>
         <button onClick={t.showAudit} style={css(TOOL_BTN)}>{t.auditLabel}</button>
+        <button onClick={t.showDevices} style={css(TOOL_BTN)}>{t.devicesLabel}</button>
         <span style={css('font-size:13px;color:#5B6472;')}>Export CSV (top) uses this date range.</span>
       </div>
 
@@ -329,6 +330,29 @@ function AdminTools({ t }) {
               {v.summary && <span style={css('color:#33404F;')}>{v.summary}</span>}
             </div>
           ))}
+        </div>
+      )}
+
+      {t.onDevices && (
+        <div style={css('display:flex;flex-direction:column;gap:8px;')}>
+          <div style={css('display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:700;color:#33404F;')}><span>{t.devicesSummary} · disconnecting a phone signs it out and needs a new setup link; the PIN does not change</span><button onClick={t.close} style={css(TOOL_BTN + 'min-height:36px;')}>Close</button></div>
+          <div style={css('overflow-x:auto;')}>
+            <div role="table" aria-label="Connected phones" style={css('min-width:900px;')}>
+              <div role="row" style={css('display:grid;grid-template-columns:minmax(200px,1fr) 150px 220px 70px 220px 130px;background:#0F2540;')}>
+                {['Phone', 'Connected', 'Last sign-in', 'Active', 'Status', ''].map(h => <div role="columnheader" key={h} style={css(H_LABEL)}>{h}</div>)}
+              </div>
+              {t.deviceRows.map((d, i) => (
+                <div role="row" key={d.key} style={css(`display:grid;grid-template-columns:minmax(200px,1fr) 150px 220px 70px 220px 130px;align-items:center;border-top:1px solid #E7EAEF;background:${d.revoked ? '#FFF6F5' : i % 2 ? '#F9FAFB' : '#FFFFFF'};`)}>
+                  <div style={css(CELL + 'display:flex;flex-direction:column;overflow-wrap:anywhere;')}><b>{d.label}</b><span style={css("color:#5B6472;font-family:'JetBrains Mono',monospace;font-size:11px;")}>{d.id}</span></div>
+                  <div style={css(CELL)}>{d.enrolled}</div>
+                  <div style={css(CELL)}>{d.last}</div>
+                  <div style={css(CELL)}>{d.active}</div>
+                  <div style={css(CELL + (d.revoked ? 'color:#A8261B;font-weight:700;' : ''))}>{d.status}</div>
+                  <div style={css(CELL)}>{d.canRevoke && <button onClick={d.revoke} aria-label={`Disconnect ${d.label}`} style={css(TOOL_BTN + 'min-height:36px;padding:0 10px;font-size:12px;border-color:#A8261B;color:#A8261B;')}>Disconnect</button>}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

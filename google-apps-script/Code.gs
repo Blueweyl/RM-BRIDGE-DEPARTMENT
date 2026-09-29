@@ -34,7 +34,7 @@ function db_() {
 // Sessions are short and bound to the phone that signed in. Work queued offline is kept on the phone
 // and sent after the next sign-in, so a short leadman session never loses data.
 var SESSION_HOURS = { leadman: 72, admin: 8 };
-var SETUP_KEY_DAYS = 7;                                 // a setup link can enrol new phones for this long
+var ENROLL_HOURS = 24;                                  // a setup link connects ONE phone, once, within this time
 var MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 var LOGIN_LIMITS = { perDevice: 5, global: 20, minutes: 15 };
 var ATT_STATUSES = ['Present', 'Absent', 'Leave', 'Rest Day', 'Sick', 'Other'];
@@ -74,9 +74,9 @@ var TABLES = {
   Photos: [
     ['photoId', 'Photo ID'], ['teamId', 'Team ID'], ['reportDate', 'Date'], ['type', 'Type'], ['status', 'Status'],
     ['fileId', 'Drive File ID'], ['fileUrl', 'File URL'], ['thumbnailUrl', 'Thumbnail URL'], ['originalFilename', 'Original Filename'],
-    ['uploadedAt', 'Uploaded'], ['uploadedBy', 'Uploaded By'],
-    ['reportId', 'Report ID'], ['clientId', 'Client Photo ID'], ['leadman', 'Leadman'], ['location', 'Location (at capture)'],
-    ['capturedAt', 'Captured (phone clock)'], ['bytes', 'Bytes'],
+    ['uploadedAt', 'Uploaded (server time)'], ['uploadedBy', 'Uploaded By'],
+    ['reportId', 'Report ID'], ['clientId', 'Client Photo ID'], ['leadman', 'Leadman'], ['location', 'Location (typed on phone, not verified)'],
+    ['capturedAt', 'Captured (phone clock, not verified)'], ['bytes', 'Bytes'],
   ],
   Revisions: [
     ['revisionId', 'Revision ID'], ['reportId', 'Report ID'], ['teamId', 'Team ID'], ['reportDate', 'Date'], ['rev', 'Revision'], ['version', 'Version'],
@@ -91,15 +91,20 @@ var TABLES = {
     ['sessionId', 'Session ID'], ['userId', 'User ID'], ['role', 'Role'], ['teamId', 'Team ID'], ['device', 'Device'],
     ['createdAt', 'Created'], ['expiresAt', 'Expires'], ['revokedAt', 'Revoked'], ['revokedReason', 'Revoked Reason'],
   ],
+  Devices: [
+    ['deviceId', 'Device ID'], ['label', 'Phone (as its browser reports it)'], ['enrolledAt', 'Enrolled'], ['link', 'Setup Link'],
+    ['revokedAt', 'Disconnected'], ['revokedBy', 'Disconnected By'], ['revokedReason', 'Reason'],
+  ],
   Requests: [
     ['key', 'Key'], ['userId', 'User ID'], ['action', 'Action'], ['requestId', 'Request ID'], ['bodyHash', 'Body Hash'], ['at', 'Time'], ['result', 'Answer (JSON)'],
   ],
 };
-var KEY_FIELD = { Users: 'userId', Teams: 'teamId', Roster: 'personId', Attendance: 'key', DailyReports: 'key', Photos: 'photoId', Revisions: 'revisionId', Sessions: 'sessionId', Requests: 'key' };
+var KEY_FIELD = { Users: 'userId', Teams: 'teamId', Roster: 'personId', Attendance: 'key', DailyReports: 'key', Photos: 'photoId', Revisions: 'revisionId', Sessions: 'sessionId', Devices: 'deviceId', Requests: 'key' };
 var FORMULA_FIELDS = { beforePreview: true, afterPreview: true };
 // Old header → new header, used when setup() upgrades an existing Sheet.
-var HEADER_ALIASES = { 'Note / Reason': ['Absence Reason'], 'Not Present (status)': ['Absent (reason)'] };
-var PROTECTED_TABS = ['Users', 'AuditLog', 'Revisions', 'Sessions', 'Requests'];
+var HEADER_ALIASES = { 'Note / Reason': ['Absence Reason'], 'Not Present (status)': ['Absent (reason)'], 'Uploaded (server time)': ['Uploaded'],
+  'Location (typed on phone, not verified)': ['Location (at capture)'], 'Captured (phone clock, not verified)': ['Captured (phone clock)'] };
+var PROTECTED_TABS = ['Users', 'AuditLog', 'Revisions', 'Sessions', 'Devices', 'Requests'];
 
 // Real crews. setup() copies them into the Sheet once (only when the tabs are empty).
 // No PINs here: setup() makes random ones and prints them once.
@@ -183,11 +188,15 @@ function setup(options) {
   var blank = ss.getSheetByName('Sheet1');
   if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
 
-  if (!props.getProperty('SETUP_KEY')) newSetupKey_();
-  // Upgrading: phones already holding the old setup link get a week to switch to a device key.
-  else if (!props.getProperty('SETUP_KEY_EXPIRES')) props.setProperty('SETUP_KEY_EXPIRES', String(Date.now() + SETUP_KEY_DAYS * 86400000));
+  // The old shared setup link (one key for every phone, 7 days) stops working. Phones already connected
+  // keep their device key; each new phone gets its own single-use link from showSetupLink().
+  props.deleteProperty('SETUP_KEY'); props.deleteProperty('SETUP_KEY_EXPIRES');
+  purgeSetupLinks_(false);
   photoRoot_();
   accSheet_();
+  // Photos are private: files shared "anyone with the link" by older versions are made private again.
+  var priv = makePhotosPrivate_(120000);
+  if (priv.left) Logger.log(priv.left + ' photos still shared by link — run makePhotosPrivate to finish.');
   // Crew names as written in the client's reports (LAST, FIRST M.), filled once; editable in the Roster tab.
   readAll_('Roster').forEach(function (m) { if (!m.reportName && REPORT_NAMES[m.personId]) upsert_('Roster', m.personId, { reportName: REPORT_NAMES[m.personId] }); });
   // Client report tabs (created if missing; their rows are rewritten from the data, never typed in).
@@ -196,29 +205,61 @@ function setup(options) {
   monthlyWrite_();
   summaryWrite_();
   ATTENDANCE_TABS.forEach(function (cfg) { attendanceTabWrite_(cfg); });
+  // Photo cells written by older versions used =IMAGE(link) (needs public files): rewrite them once as private links.
+  if (!props.getProperty('PREVIEWS_PRIVATE')) {
+    readAll_('DailyReports').forEach(function (r) {
+      if (!r.beforePhotoId && !r.afterPhotoId) return;
+      var b = row_('Photos', r.beforePhotoId), a = row_('Photos', r.afterPhotoId);
+      upsert_('DailyReports', r.key, { beforePreview: photoCell_(b), afterPreview: photoCell_(a) });
+    });
+    rebuildAccomplishmentReport();
+    rebuildClientTabs();
+    props.setProperty('PREVIEWS_PRIVATE', '1');
+  }
   audit_({ name: 'setup', role: 'system' }, '', 'setup', 'system', '', null, null, 'setup() run');
   Logger.log('Setup complete. Write the PINs above down now — the Users tab only keeps a hash.');
   Logger.log('Next: Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), then run showSetupLink.');
   return { pins: pins };
 }
 
-/** Print the setup link to send to phones. Run from the editor after deploying; paste your app address below. */
+/**
+ * Print a setup link for ONE new phone. Run from the editor after deploying (run it again for each phone).
+ * The link works once, within ENROLL_HOURS; a leaked, used or expired link cannot connect another phone.
+ */
 function showSetupLink() {
   var APP_ADDRESS = 'https://bridge-nlex-report.netlify.app/';   // where the app is hosted (Netlify)
-  var props = PropertiesService.getScriptProperties();
-  if (Number(props.getProperty('SETUP_KEY_EXPIRES') || 0) < Date.now()) newSetupKey_();
-  var url = ScriptApp.getService().getUrl();
-  Logger.log(APP_ADDRESS + '?backend=' + encodeURIComponent(url) + '&key=' + props.getProperty('SETUP_KEY'));
-  Logger.log('This link can connect new phones until ' + Utilities.formatDate(new Date(Number(props.getProperty('SETUP_KEY_EXPIRES'))), TZ, 'yyyy-MM-dd HH:mm') + ' (Manila).');
+  var link = newSetupLink_();
+  Logger.log(APP_ADDRESS + '?backend=' + encodeURIComponent(ScriptApp.getService().getUrl()) + '&key=' + link.token);
+  Logger.log('This link connects ONE phone, once, until ' + Utilities.formatDate(new Date(link.exp), TZ, 'yyyy-MM-dd HH:mm') + ' (Manila). Run showSetupLink again for the next phone.');
 }
 
-/** New setup key: old setup links stop working. Phones already connected keep working. */
-function newSetupKey() { newSetupKey_(); showSetupLink(); }
+/** Cancel every setup link not used yet. Phones already connected keep working. */
+function cancelSetupLinks() { Logger.log(purgeSetupLinks_(true) + ' unused setup link(s) cancelled.'); }
 
-function newSetupKey_() {
-  var props = PropertiesService.getScriptProperties();
-  props.setProperty('SETUP_KEY', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '').slice(0, 8));
-  props.setProperty('SETUP_KEY_EXPIRES', String(Date.now() + SETUP_KEY_DAYS * 86400000));
+/**
+ * Single-use setup links. Only a keyed hash of the link's token is kept (script properties, not the Sheet),
+ * with its expiry and, once used, which phone used it.
+ */
+function setupLinkKey_(token) { return 'ENR_' + hmac_('enroll|' + token, 'DEVICE_SECRET').slice(0, 32); }
+
+function newSetupLink_() {
+  purgeSetupLinks_(false);
+  var token = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').slice(0, 40);
+  var exp = Date.now() + ENROLL_HOURS * 3600000;
+  PropertiesService.getScriptProperties().setProperty(setupLinkKey_(token), JSON.stringify({ exp: exp, made: now_() }));
+  return { token: token, exp: exp };
+}
+
+/** Remove expired setup links (and, with `all`, every unused one). Returns how many were removed. */
+function purgeSetupLinks_(all) {
+  var props = PropertiesService.getScriptProperties(), n = 0, keys = Object.keys(props.getProperties());
+  keys.forEach(function (k) {
+    if (k.indexOf('ENR_') !== 0) return;
+    var rec = null; try { rec = JSON.parse(props.getProperty(k)); } catch (e) {}
+    // A used link is kept until it expires, so its phone can retry after a dropped reply and a replay is recognised.
+    if (!rec || Number(rec.exp) < Date.now() || (all && !rec.usedAt)) { props.deleteProperty(k); if (!rec || !rec.usedAt) n++; }
+  });
+  return n;
 }
 
 /** n different random 4-digit PINs, avoiding weak ones (all digits the same, or a run like 1234). */
@@ -238,8 +279,28 @@ function signOutEveryone() {
 
 /** Disconnect every phone: each one needs a new setup link before anyone can sign in on it. */
 function forgetAllPhones() {
+  purgeSetupLinks_(true);
   PropertiesService.getScriptProperties().setProperty('DEVICE_SECRET', Utilities.getUuid() + Utilities.getUuid());
   signOutEveryone();
+}
+
+/**
+ * Make every evidence photo private (older versions shared them "anyone with the link").
+ * Stops after `budgetMs` (Apps Script runs are limited to 6 minutes) and continues on the next run.
+ */
+function makePhotosPrivate() { var r = makePhotosPrivate_(300000); Logger.log(r.done + ' photo files made private, ' + r.left + ' left' + (r.left ? ' — run again.' : '.')); }
+
+function makePhotosPrivate_(budgetMs) {
+  var props = PropertiesService.getScriptProperties(), start = Date.now();
+  var rows = readAll_('Photos'), i = Number(props.getProperty('PHOTOS_PRIVATE_UPTO') || 0), done = 0;
+  for (; i < rows.length; i++) {
+    if (Date.now() - start > budgetMs) break;
+    if (!rows[i].fileId) continue;
+    try { DriveApp.getFileById(rows[i].fileId).setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); done++; }
+    catch (e) { Logger.log('Could not make photo ' + rows[i].photoId + ' private: ' + e); }
+  }
+  props.setProperty('PHOTOS_PRIVATE_UPTO', String(i));
+  return { done: done, left: rows.length - i };
 }
 
 /** Lift a sign-in lockout early (after too many wrong PINs). */
@@ -280,19 +341,33 @@ function rebuildAccomplishmentReport() {
   return reps.length;
 }
 
-/** Check the audit log has not been edited by hand. Logs the first broken row, if any. */
+/**
+ * Check the audit log has not been changed by hand. The hash chain catches edited, reordered or inserted
+ * rows; the checkpoint (kept in script properties, outside the Sheet) catches rows deleted from the end.
+ */
 function verifyAuditLog() {
   CACHE = {};
-  var rows = readAll_('AuditLog'), prev = '';
+  var rows = readAll_('AuditLog'), prev = '', fail = function (row, why) { Logger.log('AUDIT LOG NOT INTACT: ' + why); return { ok: false, row: row, reason: why }; };
   for (var i = 0; i < rows.length; i++) {
-    if (auditHash_(prev, rows[i]) !== rows[i].hash) {
-      Logger.log('Audit log changed by hand at row ' + (i + 2) + ' (' + rows[i].auditId + ')');
-      return { ok: false, row: i + 2 };
-    }
+    if (auditHash_(prev, rows[i]) !== rows[i].hash) return fail(i + 2, 'changed by hand at row ' + (i + 2) + ' (' + rows[i].auditId + ')');
     prev = rows[i].hash;
   }
-  Logger.log('Audit log intact: ' + rows.length + ' entries.');
-  return { ok: true, rows: rows.length };
+  var cp = auditCheckpoint_(), tamper = auditTamper_();
+  if (cp && !cp.valid) return fail(0, 'the audit checkpoint itself was changed');
+  if (cp && rows.length < cp.n) return fail(rows.length + 2, (cp.n - rows.length) + ' entr' + (cp.n - rows.length === 1 ? 'y' : 'ies') + ' deleted from the end (checkpoint expects ' + cp.n + ')');
+  if (cp && rows.length > cp.n) return fail(cp.n + 2, (rows.length - cp.n) + ' entr' + (rows.length - cp.n === 1 ? 'y' : 'ies') + ' after the checkpoint (added outside the app, or the checkpoint could not be saved)');
+  if (cp && cp.n && rows[cp.n - 1].hash !== cp.h) return fail(cp.n + 1, 'the last entry does not match the checkpoint');
+  if (tamper) return fail(0, 'earlier tampering was detected at ' + tamper.at + ': ' + tamper.what + ' (run resetAuditCheckpoint after checking)');
+  Logger.log('Audit log intact: ' + rows.length + ' entries' + (cp ? ', matches the checkpoint.' : ' (no checkpoint yet — it is made with the next entry).'));
+  return { ok: true, rows: rows.length, checkpoint: !!cp };
+}
+
+/** After investigating a tampering warning: accept the audit log as it is now and start a new checkpoint (itself audited). */
+function resetAuditCheckpoint() {
+  var props = PropertiesService.getScriptProperties(), old = auditTamper_();
+  props.deleteProperty('AUDIT_TAMPER'); props.deleteProperty('AUDIT_CHECKPOINT');
+  audit_({ name: 'script editor', role: 'system' }, '', 'audit checkpoint reset', 'system', '', old, null, 'resetAuditCheckpoint() run');
+  Logger.log('Audit checkpoint reset.');
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -334,6 +409,8 @@ function doPost(e) {
   } catch (err) {
     var msg = String(err && err.message || err);
     var o = { ok: false, error: msg.replace(/^(AUTH|CONFLICT|DENIED): /, '') };
+    msg = msg.replace(/^DEVICE: /, function () { o.notSetUp = true; return 'AUTH: '; });
+    o.error = msg.replace(/^(AUTH|CONFLICT|DENIED): /, '');
     if (msg.indexOf('AUTH: ') === 0) o.auth = true;
     if (msg.indexOf('CONFLICT: ') === 0) o.conflict = true;
     if (msg.indexOf('DENIED: ') === 0) o.denied = true;
@@ -351,6 +428,7 @@ var ACTIONS = {
   load:           { run: load_ },
   saveAttendance: { run: saveAttendance_, writes: true, idem: true },
   uploadPhoto:    { run: uploadPhoto_, writes: true },                  // idempotent by the phone's photo ID (clientId)
+  photoView:      { run: photoView_ },                                  // private photo bytes for a signed-in, authorised user
   removePhoto:    { run: removePhoto_, writes: true },
   submitReport:   { run: submitReport_, writes: true, idem: true },
   reopenReport:   { run: reopenReport_, writes: true, idem: true },
@@ -361,6 +439,8 @@ var ACTIONS = {
   adminReports:   { run: adminReports_, admin: true },
   revisions:      { run: revisions_, admin: true },
   auditLog:       { run: auditLog_, admin: true },
+  devices:        { run: devices_, admin: true },
+  revokeDevice:   { run: revokeDevice_, writes: true, admin: true },
 };
 
 /** Canonical JSON (sorted keys) so the same request always hashes the same. */
@@ -399,29 +479,61 @@ function idemStore_(idem, result) {
 // Auth: device enrolment → PIN sign-in → server-side session
 // ════════════════════════════════════════════════════════════════════════════
 
-/** Setup link key → a signed per-phone device key. The setup key itself is not kept on the phone. */
+/**
+ * Single-use setup link → a signed per-phone device key. The link's token is not kept on the phone.
+ * A link works once: a replay (the link was leaked, forwarded or reused) is refused and audited. The phone's
+ * own random enrolment ID lets that same phone retry after a dropped reply and get its device key again.
+ */
 function enroll_(_, req) {
-  // Wrong setup keys are limited on their own counter: they cannot lock PIN sign-in for everyone
-  // (the key is 160 random bits, so guessing it is not a practical attack).
+  // Wrong links are limited on their own counter: they cannot lock PIN sign-in for everyone
+  // (a link is 160 random bits, so guessing one is not a practical attack).
   var cache = CacheService.getScriptCache(), bad = Number(cache.get('fail:enroll') || 0);
   if (bad >= 50) throw new Error('Too many attempts. Wait ' + LOGIN_LIMITS.minutes + ' minutes, then try again.');
-  var props = PropertiesService.getScriptProperties();
-  var key = props.getProperty('SETUP_KEY'), exp = Number(props.getProperty('SETUP_KEY_EXPIRES') || 0);
-  if (!key || String(req.setupKey || '') !== key) {
+  var props = PropertiesService.getScriptProperties(), token = String(req.setupKey || '');
+  var key = /^[a-z0-9]{8,64}$/i.test(token) ? setupLinkKey_(token) : '', rec = null;
+  if (key) { try { rec = JSON.parse(props.getProperty(key) || 'null'); } catch (e) {} }
+  if (!rec) {
     cache.put('fail:enroll', String(bad + 1), LOGIN_LIMITS.minutes * 60);
     return { ok: false, error: 'This setup link is not valid. Ask the admin for a new one.', notSetUp: true };
   }
-  if (exp < Date.now()) return { ok: false, error: 'This setup link has expired. Ask the admin for a new one.', notSetUp: true };
-  var device = 'dev-' + Utilities.getUuid().slice(0, 13);
-  var label = String(req.deviceLabel || '').replace(/[^\w .,()\/-]/g, '').slice(0, 60);
+  var nonce = /^[A-Za-z0-9-]{8,64}$/.test(String(req.enrollId || '')) ? hmac_('eid|' + req.enrollId, 'DEVICE_SECRET').slice(0, 24) : '';
+  var label = String(req.deviceLabel || '').replace(/[^\w .,()\/;:-]/g, '').slice(0, 60);
+  if (rec.usedAt) {
+    // Same phone retrying (its reply was lost): same device, same key. Anyone else: refused.
+    if (nonce && rec.by === nonce && Number(rec.exp) >= Date.now()) return { ok: true, deviceKey: signed_({ d: rec.device, iat: rec.usedAt }, 'DEVICE_SECRET'), replay: true };
+    cache.put('fail:enroll', String(bad + 1), LOGIN_LIMITS.minutes * 60);
+    audit_({ name: 'unknown phone', role: 'device' }, '', 'DENIED setup link used again', 'device', rec.device, null, null, 'Link first used ' + rec.usedOn + '; new attempt from: ' + label);
+    return { ok: false, error: 'This setup link was already used. Ask the admin for a new one.', notSetUp: true };
+  }
+  if (Number(rec.exp) < Date.now()) {
+    props.deleteProperty(key);
+    return { ok: false, error: 'This setup link has expired. Ask the admin for a new one.', notSetUp: true };
+  }
+  var device = 'dev-' + Utilities.getUuid().slice(0, 13), now = now_();
+  rec.usedAt = Date.now(); rec.usedOn = now; rec.by = nonce || 'none'; rec.device = device;
+  props.setProperty(key, JSON.stringify(rec));
+  REQ.device = device;
+  upsert_('Devices', device, { deviceId: device, label: label, enrolledAt: now, link: key.slice(4, 12) });
   audit_({ name: 'new phone', role: 'device' }, '', 'device enrolled', 'device', device, null, null, label);
-  return { ok: true, deviceKey: signed_({ d: device, iat: Date.now() }, 'DEVICE_SECRET') };
+  return { ok: true, deviceKey: signed_({ d: device, iat: rec.usedAt }, 'DEVICE_SECRET') };
+}
+
+/** A phone the admin disconnected (Devices tab) cannot sign in or use a session any more. */
+function deviceRevoked_(deviceId) {
+  if (!db_().getSheetByName('Devices')) return false;   // new code pasted, setup() not run yet: nothing can be disconnected yet
+  var d = row_('Devices', deviceId);
+  return !!(d && d.revokedAt);
 }
 
 function login_(_, req) {
   var dk = unsign_(req.deviceKey, 'DEVICE_SECRET');
   if (!dk || !dk.d) return { ok: false, error: 'This phone is not set up yet. Open the setup link from your admin.', notSetUp: true };
   loginGate_(dk.d);
+  if (deviceRevoked_(dk.d)) {
+    REQ.device = dk.d;
+    audit_({ name: 'disconnected phone', role: 'device' }, '', 'DENIED sign-in from disconnected phone', 'device', dk.d, null, null, '');
+    return { ok: false, error: 'This phone was disconnected by the admin. Ask for a new setup link.', notSetUp: true };
+  }
   var pin = String(req.pin || '');
   normalizePins_();
   var matches = /^\d{4}$/.test(pin) ? readAll_('Users').filter(function (u) { return u.active !== 'No' && u.pin === pinHash_(u.userId, pin); }) : [];
@@ -451,6 +563,42 @@ function logout_(s) {
   return { ok: true };
 }
 
+/** Admin: every connected phone with its last sign-in, so a lost or shared phone can be disconnected. */
+function devices_(s) {
+  var by = {};
+  readAll_('Devices').forEach(function (d) { by[d.deviceId] = { deviceId: d.deviceId, label: d.label, enrolledAt: d.enrolledAt, revokedAt: d.revokedAt, revokedBy: d.revokedBy, revokedReason: d.revokedReason }; });
+  var names = {};
+  readAll_('Users').forEach(function (u) { names[u.userId] = u.name; });
+  readAll_('Sessions').forEach(function (x) {
+    if (!x.device) return;
+    var d = by[x.device] || (by[x.device] = { deviceId: x.device, label: '(connected before the device list)', enrolledAt: '' });
+    if (!d.lastSignIn || x.createdAt > d.lastSignIn) { d.lastSignIn = x.createdAt; d.lastUser = names[x.userId] || x.userId; }
+    if (!x.revokedAt && Number(x.expiresAt) > Date.now()) d.activeSessions = (d.activeSessions || 0) + 1;
+  });
+  var list = Object.keys(by).map(function (k) { var d = by[k]; d.thisDevice = k === s.device; d.activeSessions = d.activeSessions || 0; return d; });
+  list.sort(function (a, b) { return String(b.lastSignIn || b.enrolledAt).localeCompare(String(a.lastSignIn || a.enrolledAt)); });
+  return { ok: true, devices: list };
+}
+
+/**
+ * Admin: disconnect ONE phone. Its sessions end now and it cannot sign in again without a new setup link.
+ * The user's PIN and their other phones are not affected.
+ */
+function revokeDevice_(s, req) {
+  var id = String(req.deviceId || ''), reason = String(req.reason || '').trim().slice(0, 300);
+  if (!/^dev-[A-Za-z0-9-]{4,40}$/.test(id)) throw new Error('Choose a phone to disconnect.');
+  if (reason.length < 3) throw new Error('Give a reason (kept in the audit log).');
+  if (id === s.device) throw new Error('This is the device you are using now — disconnect it from another device.');
+  var known = row_('Devices', id), sessions = readAll_('Sessions').filter(function (x) { return x.device === id; });
+  if (!known && !sessions.length) throw new Error('Phone not found — refresh the list.');
+  if (known && known.revokedAt) return { ok: true, already: true };
+  var now = now_(), ended = 0;
+  upsert_('Devices', id, { revokedAt: now, revokedBy: s.user.name, revokedReason: reason }, { label: '(connected before the device list)' });
+  sessions.forEach(function (x) { if (!x.revokedAt) { upsert_('Sessions', x.sessionId, { revokedAt: now, revokedReason: 'phone disconnected by admin' }); ended++; } });
+  audit_(s.user, '', 'device disconnected', 'device', id, null, { sessionsEnded: ended }, reason);
+  return { ok: true, sessionsEnded: ended };
+}
+
 function userFor_(u) {
   if (u.role === 'admin') return { userId: u.userId, role: 'admin', teamId: '', name: u.name || 'Operations Admin', team: 'All teams · NLEX' };
   var t = row_('Teams', u.teamId) || {};
@@ -462,6 +610,7 @@ function verify_(token, deviceKey) {
   if (!p || !p.s || !p.u) throw new Error('AUTH: Please sign in again.');
   if (!p.exp || p.exp < Date.now()) throw new Error('AUTH: Session expired. Please sign in again.');
   var ses = row_('Sessions', p.s);
+  if (ses && ses.userId === p.u && deviceRevoked_(ses.device)) throw new Error('DEVICE: This phone was disconnected by the admin. Ask for a new setup link.');
   if (!ses || ses.userId !== p.u || ses.revokedAt || Number(ses.expiresAt) < Date.now()) throw new Error('AUTH: Please sign in again.');
   var u = row_('Users', p.u);
   // Changing a PIN in the Users tab (or setting Active = No) signs that person out everywhere.
@@ -631,8 +780,11 @@ function phoneQueues_(teams) {
 }
 
 function auditFailures_() {
-  var v = PropertiesService.getScriptProperties().getProperty('AUDIT_FAILURES');
-  try { return v ? JSON.parse(v) : null; } catch (e) { return null; }
+  var v = PropertiesService.getScriptProperties().getProperty('AUDIT_FAILURES'), o = null;
+  try { o = v ? JSON.parse(v) : null; } catch (e) {}
+  var t = auditTamper_();
+  if (t) { o = o || { count: 0 }; o.tamper = t.what + ' (detected ' + t.at + ')'; }
+  return o;
 }
 
 function leadmen_() {
@@ -788,6 +940,12 @@ function uploadPhoto_(s, req) {
   // The declared type is only a claim: the file's own first bytes must say the same thing.
   var kind = imageKind_(bytes);
   if (!kind || kind !== m[2].toLowerCase()) throw new Error('That file is not a real JPEG, PNG or WebP photo — take it again.');
+  // ...and its structure must be a complete, sane image of that type (no truncation, no data hidden after it).
+  var dims = imageDims_(bytes, kind);
+  if (!dims) {
+    audit_(s.user, teamId, 'DENIED photo refused', 'photo', clientId, null, null, 'Damaged or disguised ' + kind + ' (' + bytes.length + ' bytes)');
+    throw new Error('That photo file is damaged or not a real photo — take it again.');
+  }
 
   rep = ensureReport_(teamId, date, s.user.name);
   var team = row_('Teams', teamId), now = now_();
@@ -795,14 +953,16 @@ function uploadPhoto_(s, req) {
   var ext = m[2].toLowerCase() === 'jpeg' ? 'jpg' : m[2].toLowerCase();
   var photoId = 'ph-' + Utilities.getUuid().slice(0, 13);
   var name = date + '_' + (team.short || team.teamId).replace(/[^A-Za-z0-9]+/g, '') + '_' + req.type.toUpperCase() + '_' + now.slice(11).replace(/:/g, '') + '_' + photoId.slice(3, 9) + '.' + ext;
+  // The file stays private (never shared by link): the app shows it through photoView to signed-in users of
+  // that team (and admins); the Sheet links to it for the Drive owner.
   var file = folder.createFile(Utilities.newBlob(bytes, m[1], name));
+  // Capture time and location come from the phone: kept as its claim, labelled "not verified", and never used
+  // for the report date, the audit time or any decision. The server's own time is uploadedAt.
   var captured = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(String(req.capturedAt || '')) ? String(req.capturedAt) : '';
   var location = String(req.location || '').trim().slice(0, 200);
-  file.setDescription('Report ' + rep.reportId + ' · ' + team.name + ' · ' + req.type.toUpperCase() + ' · uploaded by ' + s.user.name + ' ' + now +
-    (captured ? ' · captured ' + captured : '') + (location ? ' · ' + location : '') + ' · original filename: ' + String(req.originalFilename || '').slice(0, 120));
-  // Link sharing lets the app and the Sheet show a preview. Workspace domains may block it;
-  // the photo is still stored and admins can open it from Drive.
-  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+  file.setDescription('Report ' + rep.reportId + ' · ' + team.name + ' · ' + req.type.toUpperCase() + ' · uploaded (server time) ' + now + ' by ' + s.user.name +
+    (captured ? ' · phone clock at capture (not verified) ' + captured : '') + (location ? ' · location typed on phone (not verified): ' + location : '') +
+    ' · ' + dims.w + '×' + dims.h + ' · original filename: ' + String(req.originalFilename || '').slice(0, 120));
 
   var replaced = markPhotos_(teamId, date, req.type, 'Replaced');
   var photo = {
@@ -825,6 +985,91 @@ function imageKind_(bytes) {
   if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47 && b(4) === 0x0D && b(5) === 0x0A && b(6) === 0x1A && b(7) === 0x0A) return 'png';
   if (String.fromCharCode(b(0), b(1), b(2), b(3)) === 'RIFF' && String.fromCharCode(b(8), b(9), b(10), b(11)) === 'WEBP') return 'webp';
   return '';
+}
+
+var MAX_PHOTO_SIDE = 12000, MIN_PHOTO_SIDE = 16, MAX_PHOTO_PIXELS = 50e6;
+
+/**
+ * Walk the file's structure (no pixel decoding: Apps Script has no image decoder) and return its size
+ * {w, h}, or null when it is truncated, malformed, has data appended after the image, or has absurd dimensions.
+ *  - JPEG: segment chain from SOI through a frame header (SOF) to scan data (SOS), ending exactly at EOI.
+ *  - PNG: IHDR first (CRC checked), chunk chain with image data (IDAT) ending exactly at IEND.
+ *  - WebP: RIFF size matches the file; VP8 / VP8L / VP8X header with its dimensions.
+ */
+function imageDims_(bytes, kind) {
+  var n = bytes.length, b = function (i) { return bytes[i] & 0xFF; }, w = 0, h = 0, i;
+  var u32 = function (i) { return ((b(i) << 24) >>> 0) + (b(i + 1) << 16) + (b(i + 2) << 8) + b(i + 3); };
+  if (kind === 'jpeg') {
+    var sos = false;
+    for (i = 2; i + 4 <= n;) {
+      if (b(i) !== 0xFF) return null;
+      var mk = b(i + 1);
+      if (mk === 0xFF) { i++; continue; }
+      if (mk === 0x01 || (mk >= 0xD0 && mk <= 0xD7)) { i += 2; continue; }
+      if (mk === 0xD8 || mk === 0xD9) return null;                  // second start, or end before any image data
+      var len = (b(i + 2) << 8) | b(i + 3);
+      if (len < 2 || i + 2 + len > n) return null;
+      if (mk >= 0xC0 && mk <= 0xCF && mk !== 0xC4 && mk !== 0xC8 && mk !== 0xCC) { if (len < 8) return null; h = (b(i + 5) << 8) | b(i + 6); w = (b(i + 7) << 8) | b(i + 8); }
+      if (mk === 0xDA) { sos = true; break; }
+      i += 2 + len;
+    }
+    if (!sos || !w || !h) return null;
+    if (b(n - 2) !== 0xFF || b(n - 1) !== 0xD9) return null;        // must end exactly at EOI (nothing appended)
+  } else if (kind === 'png') {
+    if (n < 45 || u32(8) !== 13 || String.fromCharCode(b(12), b(13), b(14), b(15)) !== 'IHDR') return null;
+    if (crc32_(bytes, 12, 29) !== u32(29)) return null;                 // CRC over "IHDR" + its 13 data bytes
+    w = u32(16); h = u32(20);
+    var idat = false, end = false;
+    for (i = 8; i + 12 <= n;) {
+      var clen = u32(i), type = String.fromCharCode(b(i + 4), b(i + 5), b(i + 6), b(i + 7));
+      if (clen > n || i + 12 + clen > n || !/^[A-Za-z]{4}$/.test(type)) return null;
+      if (type === 'IDAT') idat = true;
+      i += 12 + clen;
+      if (type === 'IEND') { end = i === n; break; }
+    }
+    if (!idat || !end) return null;
+  } else if (kind === 'webp') {
+    var riff = b(4) + (b(5) << 8) + (b(6) << 16) + (b(7) << 24 >>> 0);
+    if (riff + 8 !== n || n < 30) return null;
+    var fourcc = String.fromCharCode(b(12), b(13), b(14), b(15));
+    if (fourcc === 'VP8X') { w = 1 + (b(24) | (b(25) << 8) | (b(26) << 16)); h = 1 + (b(27) | (b(28) << 8) | (b(29) << 16)); }
+    else if (fourcc === 'VP8 ') { if (b(23) !== 0x9D || b(24) !== 0x01 || b(25) !== 0x2A) return null; w = (b(26) | (b(27) << 8)) & 0x3FFF; h = (b(28) | (b(29) << 8)) & 0x3FFF; }
+    else if (fourcc === 'VP8L') { if (b(20) !== 0x2F) return null; w = 1 + (((b(22) & 0x3F) << 8) | b(21)); h = 1 + (((b(24) & 0x0F) << 10) | (b(23) << 2) | ((b(22) & 0xC0) >> 6)); }
+    else return null;
+  } else return null;
+  if (w < MIN_PHOTO_SIDE || h < MIN_PHOTO_SIDE || w > MAX_PHOTO_SIDE || h > MAX_PHOTO_SIDE || w * h > MAX_PHOTO_PIXELS) return null;
+  return { w: w, h: h };
+}
+
+function crc32_(bytes, from, to) {
+  var c, crc = 0xFFFFFFFF;
+  for (var i = from; i < to; i++) {
+    c = (crc ^ bytes[i]) & 0xFF;
+    for (var k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xEDB88320 : c >>> 1;
+    crc = (crc >>> 8) ^ c;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/** Sheet cell for a photo: a link to the private Drive file (opens for the Drive owner / people it is shared with). */
+function photoCell_(p) {
+  if (!p || !/^[\w-]+$/.test(String(p.fileId || ''))) return '';
+  return '=HYPERLINK("https://drive.google.com/file/d/' + p.fileId + '/view","' + (p.type === 'after' ? 'After' : 'Before') + ' photo")';
+}
+
+/**
+ * The photo itself, for the app's preview. Files are private in Drive; the server reads them for a signed-in
+ * user of the photo's own team, or an admin. Anyone else is refused and audited.
+ */
+function photoView_(s, req) {
+  var p = row_('Photos', String(req.photoId || ''));
+  if (!p) throw new Error('Photo not found — refresh and try again.');
+  if (!isAdmin_(s) && p.teamId !== s.user.teamId) deny_(s, 'photoView', 'photo of another team (' + p.photoId + ')');
+  var blob;
+  try { blob = DriveApp.getFileById(p.fileId).getBlob(); } catch (e) { throw new Error('The photo file could not be opened in Drive.'); }
+  var bytes = blob.getBytes();
+  if (bytes.length > MAX_PHOTO_BYTES) throw new Error('Photo too large to preview.');
+  return { ok: true, photoId: p.photoId, dataUrl: 'data:' + (blob.getContentType() || 'image/jpeg') + ';base64,' + Utilities.base64Encode(bytes) };
 }
 
 function removePhoto_(s, req) {
@@ -943,7 +1188,7 @@ function submitReport_(s, req) {
   var row = {
     leadman: leadmen_()[teamId] || old.leadman, state: 'submitted',
     beforePhotoId: before.photoId, afterPhotoId: after ? after.photoId : '',
-    beforePreview: '=IMAGE("' + before.thumbnailUrl + '")', afterPreview: after ? '=IMAGE("' + after.thumbnailUrl + '")' : '',
+    beforePreview: photoCell_(before), afterPreview: photoCell_(after),
     submittedAt: now, submittedBy: s.user.name, updatedAt: now, editedBy: s.user.name,
     version: String((Number(old.version) || 0) + 1), rev: String((Number(old.rev) || 0) + 1),
     firstSubmittedAt: first, late: (first.slice(0, 10) > date || first.slice(11, 16) > LATE_CUTOFF) ? 'Yes' : 'No',
@@ -1007,7 +1252,7 @@ function accSheet_() {
 function accValues_(r) {
   var photos = {};
   readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
-  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
+  var img = function (id) { return photoCell_(photos[id]); };
   // Who was present that day (including anyone removed from the crew since), leadman in his own column.
   var crew = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate && a.status === 'Present' && a.role !== 'Leadman'; })
     .map(function (a) { return safeCell_(a.name); });
@@ -1025,7 +1270,7 @@ function accWrite_(r) {
   if (!row) row = Math.max(last + 1, ACC_FIRST_ROW);
   if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 200);
   var v = accValues_(r);
-  // Text format keeps dates, times and plate numbers exactly as entered; the photo columns stay General for =IMAGE().
+  // Text format keeps dates, times and plate numbers exactly as entered; the photo columns stay General for the photo links.
   sh.getRange(row, 1, 1, ACC_HEAD.length).setNumberFormats([ACC_HEAD.map(function (h, i) { return i === 7 || i === 8 ? 'General' : '@'; })]);
   sh.getRange(row, 1, 1, ACC_HEAD.length).setValues([[String(row - ACC_FIRST_ROW + 1)].concat(v)]);
   sh.getRange(row, 1, 1, ACC_HEAD.length).setVerticalAlignment('middle').setWrap(true);
@@ -1156,7 +1401,7 @@ function reportFacts_(r) {
   var att = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate; });
   var lead = att.filter(function (a) { return a.role === 'Leadman'; })[0];
   var leadIn = lead ? (lead.status === 'Present' ? '1' : '0') : '';
-  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
+  var img = function (id) { return photoCell_(photos[id]); };
   var t = teamTab_(r.teamId);
   return {
     crew: att.filter(function (a) { return a.status === 'Present' && a.role !== 'Leadman'; }).map(function (a) { return safeCell_(reportName_(byId[a.personId] || { name: a.name })); }).join('\n'),
@@ -1628,6 +1873,19 @@ function deleteRow_(name, key) {
   delete CACHE[name];
 }
 
+/** Latest audit row count + hash, HMAC-signed, in script properties (Sheet editors cannot change it). */
+function auditCheckpoint_() {
+  var v = PropertiesService.getScriptProperties().getProperty('AUDIT_CHECKPOINT'), cp = null;
+  if (!v) return null;
+  try { cp = JSON.parse(v); } catch (e) { return { valid: false }; }
+  cp.valid = !!cp && cp.sig === hmac_('cp|' + cp.n + '|' + cp.h, 'AUDIT_SECRET');
+  return cp;
+}
+function auditTamper_() {
+  var v = PropertiesService.getScriptProperties().getProperty('AUDIT_TAMPER');
+  try { return v ? JSON.parse(v) : null; } catch (e) { return { at: '?', what: 'unreadable tamper record' }; }
+}
+
 function auditHash_(prev, a) {
   var body = [prev, a.auditId, a.at, a.user, a.role, a.teamId, a.action, a.entity, a.entityId, a.before, a.after, a.reason, a.requestId, a.device].join('␞');
   // User ID and revision were added later: rows written before that keep their original hash.
@@ -1644,8 +1902,15 @@ function audit_(user, teamId, action, entity, entityId, before, after, reason, r
   var lock = null;
   try {
     if (!LOCKED) { lock = LockService.getScriptLock(); if (!lock.tryLock(10000)) lock = null; }
-    var sh = sheet_('AuditLog'), last = sh.getLastRow();
+    var sh = sheet_('AuditLog'), last = sh.getLastRow(), props = PropertiesService.getScriptProperties();
     var prev = last > 1 ? String(sh.getRange(last, col_('AuditLog', 'hash')).getDisplayValues()[0][0] || '') : '';
+    // The log must still end where the app last left it; otherwise rows were deleted, added or replaced by hand.
+    // The warning stays (admin screen + verifyAuditLog) even after new rows are appended.
+    var cp = auditCheckpoint_();
+    if (cp && (!cp.valid || cp.n !== last - 1 || cp.h !== prev) && !props.getProperty('AUDIT_TAMPER')) {
+      props.setProperty('AUDIT_TAMPER', JSON.stringify({ at: now_(), what: !cp.valid ? 'audit checkpoint changed'
+        : last - 1 < cp.n ? (cp.n - last + 1) + ' audit entries deleted from the end' : 'audit log does not end where the app left it (' + (last - 1) + ' rows, expected ' + cp.n + ')' }));
+    }
     var j = function (o) { return o == null ? '' : (typeof o === 'string' ? o : JSON.stringify(o)).slice(0, 5000); };
     var a = { auditId: 'au-' + Utilities.getUuid().slice(0, 13), at: now_(), user: user.name || '', role: user.role || '', teamId: teamId || '',
       action: action, entity: entity || '', entityId: entityId || '', before: j(before), after: j(after), reason: String(reason || '').slice(0, 2000),
@@ -1656,6 +1921,7 @@ function audit_(user, teamId, action, entity, entityId, before, after, reason, r
     formatRows_(sh, 'AuditLog', row, 1);
     sh.getRange(row, 1, 1, TABLES.AuditLog.length).setValues([TABLES.AuditLog.map(function (c) { return safeCell_(a[c[0]]); })]);
     delete CACHE.AuditLog;
+    props.setProperty('AUDIT_CHECKPOINT', JSON.stringify({ n: row - 1, h: a.hash, at: a.at, sig: hmac_('cp|' + (row - 1) + '|' + a.hash, 'AUDIT_SECRET') }));
   } catch (e) {
     // Never silent: the admin screen shows how many audit entries could not be written, and the last error.
     Logger.log('audit failed: ' + e);

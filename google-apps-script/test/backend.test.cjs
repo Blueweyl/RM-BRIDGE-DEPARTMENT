@@ -6,7 +6,9 @@ const { makeBackend } = require('./fake-gas.cjs');
 
 let failed = 0;
 const ok = (name, cond, detail) => { if (!cond) failed++; console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (detail !== undefined && !cond ? '  [' + detail + ']' : '')); };
-const jpegBytes = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.from('fake-jpeg-bytes'.repeat(20))]);
+// Real images (64×48, made by a browser canvas like the app does).
+const FIX = require('path').join(__dirname, 'fixtures'), fs0 = require('fs');
+const jpegBytes = fs0.readFileSync(FIX + '/tiny.jpeg'), pngBytes = fs0.readFileSync(FIX + '/tiny.png'), webpBytes = fs0.readFileSync(FIX + '/tiny.webp');
 const img = 'data:image/jpeg;base64,' + jpegBytes.toString('base64');
 const uid = () => crypto.randomUUID();
 const DEMO_PINS = ['0000', '1111', '2222', '3333', '4444'];   // fixed PINs for tests only (admin, team1..team4)
@@ -25,7 +27,7 @@ const R = makeBackend(); const rs = R.env.setup();
 const rp = Object.values(rs.pins);
 ok('real setup makes 5 different random PINs, none of the demo ones', rp.length === 5 && new Set(rp).size === 5 && rp.every(p => /^\d{4}$/.test(p) && !['0000', '1111', '2222', '3333', '4444'].includes(p)), rp.join());
 ok('secrets created', ['TOKEN_SECRET', 'PIN_SECRET', 'DEVICE_SECRET', 'AUDIT_SECRET'].every(k => (B.props[k] || '').length > 40));
-ok('setup key expires', Number(B.props.SETUP_KEY_EXPIRES) > Date.now());
+ok('no reusable shared setup key is kept', !B.props.SETUP_KEY && !B.props.SETUP_KEY_EXPIRES);
 
 // ── Auth ────────────────────────────────────────────────────────────────
 ok('[3] no token → sign in again', call({ action: 'load' }).auth === true);
@@ -138,7 +140,7 @@ r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: toda
 ok('before photo uploaded to Drive with metadata', r.ok && r.photo.fileId && r.photo.reportId === reportId && r.photo.leadman === 'Glenn Butiong' && r.photo.capturedAt === today + ' 07:12' && r.photo.clientId === cBefore, JSON.stringify(r));
 const beforeId = r.photo.photoId;
 const f1 = B.files[r.photo.fileId];
-ok('photo stored in date/team folder with report ID in description', f1.folder.name === 'Segment 10' && f1.blob.name.startsWith(today + '_Segment10_BEFORE_') && f1.shared && f1.description.includes(reportId));
+ok('photo stored in date/team folder with report ID in description', f1.folder.name === 'Segment 10' && f1.blob.name.startsWith(today + '_Segment10_BEFORE_') && f1.access === 'private' && f1.description.includes(reportId));
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'before', dataUrl: img, clientId: cBefore });
 ok('[4][7] retried upload returns the same photo, no duplicate', r.ok && r.replay && r.photo.photoId === beforeId && B.env.readAll_('Photos').filter(p => p.teamId === 'team2').length === 1);
 ok('photo ID reused on another type refused', call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, clientId: cBefore }).denied === true);
@@ -190,7 +192,7 @@ let A2 = call({ action: 'load', token: T.admin });
 let rep = A2.reports.find(x => x.teamId === 'team2' && x.reportDate === today);
 ok('admin sees submitted report', rep && rep.state === 'submitted' && rep.location === form.location && rep.plateNumber === 'NKU 8624' && rep.unit === 'KM');
 ok('remarks stored as text, not a formula', B.sheets.DailyReports.getRange(2, B.env.col_('DailyReports', 'remarks')).getFormulas()[0][0] === '' && rep.remarks === form.remarks);
-ok('photo previews in Sheet are IMAGE formulas', B.sheets.DailyReports.getRange(2, B.env.col_('DailyReports', 'beforePreview')).getFormulas()[0][0].startsWith('=IMAGE('));
+ok('photo cells in Sheet link to the private Drive file (no public =IMAGE)', /^=HYPERLINK\("https:\/\/drive\.google\.com\/file\/d\/[\w-]+\/view","Before photo"\)$/.test(B.sheets.DailyReports.getRange(2, B.env.col_('DailyReports', 'beforePreview')).getFormulas()[0][0]));
 ok('admin sees attendance with status + note', A2.attendance.filter(a => a.teamId === 'team2').length === 9 && A2.attendance.find(a => a.name === 'Abraham Balmeo').note === 'Medical check-up');
 ok('admin sees 2 active photos', A2.photos.filter(p => p.teamId === 'team2').length === 2);
 ok('other leadman cannot see team2', call({ action: 'load', token: T.t3 }).reports.every(x => x.teamId === 'team3'));
@@ -266,7 +268,7 @@ ok('Accomplishment Report tab has the report layout (title, groups, 15 columns +
   && ACC.data[2].slice(0, 15).join('|') === '#|Date|From|To|Location|Activity|Status|Before|After|Qty|Equipment|Qty|Manpower|Qty|Leadman/Driver', ACC && JSON.stringify(ACC.data.slice(0, 3)));
 const a2 = accRows().find(r => r[15] === reportId), rep2 = B.env.row_('DailyReports', 'team2|' + today);
 ok('each submitted report fills a row automatically', a2 && a2[1] === today && a2[2] === '07:00' && a2[3] === '16:00' && a2[4] === 'Km.12' && a2[5] === form.activityDetails && a2[6] === 'COMPLETE' && a2[10] === 'NKU 8624' && a2[14] === 'Glenn Butiong', JSON.stringify(a2));
-ok('…with before/after photos shown in the cells', /^=IMAGE\("https:\/\/drive\.google\.com\/thumbnail/.test(a2[7]) && /^=IMAGE\(/.test(a2[8]));
+ok('…with before/after photo links in the cells', /^=HYPERLINK\("https:\/\/drive\.google\.com\/file\/d\/.+Before photo/.test(a2[7]) && /^=HYPERLINK\(.+After photo/.test(a2[8]));
 ok('…and the crew present (names + count, leadman in his own column)', a2[11] === String(a2[12].split('\n').length) && !a2[12].includes('Glenn Butiong') && a2[12].includes('Ian Enriquez') && !a2[12].includes('Rolando Faustino') && a2[13] === '1', a2[11] + ' / ' + a2[12]);
 ok('an edited and resubmitted report updates its row (no duplicate row)', accRows().filter(r => r[15] === reportId).length === 1 && a2[4] === rep2.location);
 ok('rows are numbered like the original (#)', accRows().map(r => r[0]).join() === accRows().map((r, i) => String(i + 1)).join() && accRows().length === 2, accRows().map(r => r[0] + ':' + r[15]).join());
@@ -375,15 +377,151 @@ const G = makeBackend(); G.env.setup({ pins: DEMO_PINS });
 for (let i = 0; i < 30; i++) G.raw({ action: 'enroll', setupKey: 'guess' + i });
 ok('wrong setup keys do not lock PIN sign-in for everyone', G.call({ action: 'login', pin: '0000', device: 'fresh0' }).ok);
 for (let i = 0; i < 30; i++) G.raw({ action: 'enroll', setupKey: 'guess' + i });
-ok('…but are rate-limited themselves', /Too many/.test(G.raw({ action: 'enroll', setupKey: G.props.SETUP_KEY }).error || ''));
+ok('…but are rate-limited themselves', /Too many/.test(G.raw({ action: 'enroll', setupKey: G.env.newSetupLink_().token }).error || ''));
 delete G.cache['fail:enroll'];   // let the next phones enrol
 for (let d = 0; d < 4; d++) for (let i = 0; i < 5; i++) G.call({ action: 'login', pin: '9876', device: 'attacker' + d });
 ok('20 wrong PINs across phones lock all sign-ins for a while', /Too many/.test(G.call({ action: 'login', pin: '0000', device: 'fresh' }).error || ''));
 ok('lockout recorded in audit log', G.env.readAll_('AuditLog').some(a => a.action === 'sign-in locked'));
 G.env.clearLoginLock();
 ok('clearLoginLock lifts it', G.call({ action: 'login', pin: '0000', device: 'fresh2' }).ok);
-G.props.SETUP_KEY_EXPIRES = String(Date.now() - 1);
-ok('expired setup link cannot enrol new phones', /expired/.test(G.raw({ action: 'enroll', setupKey: G.props.SETUP_KEY }).error || ''));
+const oldLink = G.env.newSetupLink_().token, oldKey = G.env.setupLinkKey_(oldLink);
+G.props[oldKey] = JSON.stringify({ ...JSON.parse(G.props[oldKey]), exp: Date.now() - 1 });
+ok('expired setup link cannot enrol new phones', /expired/.test(G.raw({ action: 'enroll', setupKey: oldLink, enrollId: 'late-phone-1' }).error || ''));
+
+// ── Hardening v4: private photos, single-use setup links, device revocation, audit checkpoint ──
+const H = makeBackend(); H.env.setup({ pins: DEMO_PINS });
+const hc = H.call, devH = name => H.env.unsign_(H.deviceKey(name), 'DEVICE_SECRET').d;
+const hAdmin = hc({ action: 'login', pin: '0000', device: 'h-pc' }), h1 = hc({ action: 'login', pin: '1111', device: 'h-p1' }), h2 = hc({ action: 'login', pin: '2222', device: 'h-p2' });
+const upH = (tok, team, type, bytes, mime = 'image/jpeg', extra = {}) => hc({ action: 'uploadPhoto', token: tok, teamId: team, reportDate: H.env.today_(), type, dataUrl: 'data:' + mime + ';base64,' + Buffer.from(bytes).toString('base64'), clientId: uid(), ...extra });
+
+// Photo privacy
+r = upH(h1.token, 'team1', 'before', jpegBytes);
+const hp = r.photo;
+ok('[P1] uploaded photo file is private (never shared by link)', r.ok && H.files[hp.fileId].access === 'private', JSON.stringify(r));
+ok('[P1] Code.gs no longer shares anything "anyone with the link"', !/ANYONE_WITH_LINK/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'Code.gs'), 'utf8')));
+r = hc({ action: 'photoView', token: h1.token, photoId: hp.photoId });
+ok('[P1] leadman sees own team\'s photo through the authenticated API (same bytes)', r.ok && Buffer.from(r.dataUrl.split(',')[1], 'base64').equals(jpegBytes));
+r = hc({ action: 'photoView', token: h2.token, photoId: hp.photoId, teamId: 'team1' });
+ok('[P1] leadman of another team is refused (even claiming that team) and it is audited', r.denied === true && H.env.readAll_('AuditLog').some(a => a.action === 'DENIED photoView' && a.userId === 'lead-team2'), JSON.stringify(r));
+ok('[P1] admin sees any team\'s photo', hc({ action: 'photoView', token: hAdmin.token, photoId: hp.photoId }).ok);
+ok('[P1] no sign-in → refused', H.raw({ action: 'photoView', photoId: hp.photoId }).auth === true);
+ok('[P1] stolen token without the phone\'s device key → refused', H.raw({ action: 'photoView', token: h1.token, photoId: hp.photoId }).auth === true);
+ok('[P1] unknown photo ID → not found', !hc({ action: 'photoView', token: hAdmin.token, photoId: 'ph-nope' }).ok);
+H.files[hp.fileId].access = 'anyone-with-link'; H.props.PHOTOS_PRIVATE_UPTO = '0';
+H.env.makePhotosPrivate_(60000);
+ok('[P1] photos shared by an older version are made private again (makePhotosPrivate / setup)', H.files[hp.fileId].access === 'private');
+
+// Client capture metadata is a claim, not evidence
+r = upH(h1.token, 'team1', 'after', jpegBytes, 'image/jpeg', { capturedAt: '2020-01-01 03:00', location: 'Forged GPS 0,0', uploadedAt: '2020-01-01 03:00:00', uploadedBy: 'someone else', photoId: 'ph-forged' });
+const fp = r.photo, lastAud = H.env.readAll_('AuditLog').filter(a => a.entityId === (fp || {}).photoId).pop() || {};
+ok('[P2] forged capture time/location stored only as the phone\'s claim', r.ok && fp.capturedAt === '2020-01-01 03:00' && fp.location === 'Forged GPS 0,0', JSON.stringify(r));
+ok('[P2] a forged old report date is refused (locked), not trusted', /locked/.test(upH(h1.token, 'team1', 'after', jpegBytes, 'image/jpeg', { reportDate: '2020-01-01', capturedAt: '2020-01-01 03:00' }).error || ''));
+ok('[P2] report date, upload time and uploader come from the server, not the request', fp.reportDate === H.env.today_() && fp.uploadedAt.slice(0, 10) === H.env.today_() && fp.uploadedBy === 'Pijay Tanjeco' && fp.photoId !== 'ph-forged');
+ok('[P2] audit time is the server clock', lastAud.at && lastAud.at.slice(0, 10) === H.env.today_());
+ok('[P2] Photos tab labels client metadata "not verified" and server time', H.sheets.Photos.data[0].includes('Captured (phone clock, not verified)') && H.sheets.Photos.data[0].includes('Location (typed on phone, not verified)') && H.sheets.Photos.data[0].includes('Uploaded (server time)'));
+ok('[P2] Drive description says the phone time is not verified', /phone clock at capture \(not verified\) 2020-01-01 03:00/.test(H.files[fp.fileId].description) && /uploaded \(server time\) /.test(H.files[fp.fileId].description));
+ok('[P2] malformed capture time is dropped', upH(h1.token, 'team1', 'after', jpegBytes, 'image/jpeg', { capturedAt: '<script>' }).photo.capturedAt === '');
+
+// Stronger photo validation
+const refused = x => /damaged or not a real photo|not a real JPEG, PNG or WebP/.test(x.error || '');
+ok('[P6] real PNG accepted', upH(h1.token, 'team1', 'after', pngBytes, 'image/png').ok);
+ok('[P6] real WebP accepted', upH(h1.token, 'team1', 'after', webpBytes, 'image/webp').ok);
+ok('[P6] truncated JPEG refused', refused(upH(h1.token, 'team1', 'after', jpegBytes.subarray(0, jpegBytes.length - 60))));
+ok('[P6] JPEG with a file hidden after it (polyglot) refused', refused(upH(h1.token, 'team1', 'after', Buffer.concat([jpegBytes, Buffer.from('PK\x03\x04<html><script>alert(1)</script>')]))));
+ok('[P6] JPEG header + junk (magic bytes only) refused', refused(upH(h1.token, 'team1', 'after', Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.from('fake-jpeg-bytes'.repeat(20))]))));
+const sof = jpegBytes.indexOf(Buffer.from([0xFF, 0xC0])), huge = Buffer.from(jpegBytes); huge.writeUInt16BE(60000, sof + 5); huge.writeUInt16BE(60000, sof + 7);
+ok('[P6] JPEG claiming 60000×60000 pixels refused', refused(upH(h1.token, 'team1', 'after', huge)));
+const badCrc = Buffer.from(pngBytes); badCrc[17] ^= 0xFF;
+ok('[P6] PNG with a damaged header (CRC) refused', refused(upH(h1.token, 'team1', 'after', badCrc, 'image/png')));
+ok('[P6] PNG with data after IEND refused', refused(upH(h1.token, 'team1', 'after', Buffer.concat([pngBytes, Buffer.from('<?php echo 1; ?>')]), 'image/png')));
+const badRiff = Buffer.from(webpBytes); badRiff.writeUInt32LE(badRiff.readUInt32LE(4) + 500, 4);
+ok('[P6] WebP whose size does not match its header refused', refused(upH(h1.token, 'team1', 'after', badRiff, 'image/webp')));
+ok('[P6] ZIP declared as JPEG refused', refused(upH(h1.token, 'team1', 'after', Buffer.concat([Buffer.from('PK\x03\x04'), Buffer.alloc(300, 1)]))));
+ok('[P6] refused photos are audited and never reach Drive', H.env.readAll_('AuditLog').some(a => a.action === 'DENIED photo refused') && Object.values(H.files).every(f => { const k = f.blob.bytes.length; return k === jpegBytes.length || k === pngBytes.length || k === webpBytes.length; }));
+
+// Single-use setup links
+const LNK = H.env.newSetupLink_().token;
+const e1 = H.raw({ action: 'enroll', setupKey: LNK, enrollId: 'phone-A-enrol-1', deviceLabel: 'Phone A' });
+const dA = e1.ok && H.env.unsign_(e1.deviceKey, 'DEVICE_SECRET').d;
+ok('[P3] a new link connects one phone (listed in Devices)', e1.ok && !!H.env.row_('Devices', dA));
+r = H.raw({ action: 'enroll', setupKey: LNK, enrollId: 'attacker-enrol-9', deviceLabel: 'Attacker' });
+ok('[P3] replaying a used link (leaked/forwarded) is refused and audited', r.notSetUp && /already used/.test(r.error) && H.env.readAll_('AuditLog').some(a => a.action === 'DENIED setup link used again'));
+ok('[P3] replay without an enrolment ID refused', /already used/.test(H.raw({ action: 'enroll', setupKey: LNK }).error || ''));
+r = H.raw({ action: 'enroll', setupKey: LNK, enrollId: 'phone-A-enrol-1', deviceLabel: 'Phone A' });
+ok('[P3] the same phone retrying after a lost reply gets its own device back (no second device)', r.ok && H.env.unsign_(r.deviceKey, 'DEVICE_SECRET').d === dA && H.env.readAll_('Devices').filter(d => d.label === 'Phone A').length === 1);
+const LNK2 = H.env.newSetupLink_().token, k2 = H.env.setupLinkKey_(LNK2);
+H.props[k2] = JSON.stringify({ ...JSON.parse(H.props[k2]), exp: Date.now() - 1 });
+ok('[P3] expired link refused', /expired/.test(H.raw({ action: 'enroll', setupKey: LNK2, enrollId: 'phone-B-enrol-1' }).error || ''));
+const LNK3 = H.env.newSetupLink_().token;
+ok('[P3] altered link refused', /not valid/.test(H.raw({ action: 'enroll', setupKey: LNK3.slice(0, -1) + (LNK3.slice(-1) === 'a' ? 'b' : 'a') }).error || ''));
+H.env.cancelSetupLinks();
+ok('[P3] cancelSetupLinks makes unused links useless', /not valid/.test(H.raw({ action: 'enroll', setupKey: LNK3, enrollId: 'phone-C-enrol-1' }).error || ''));
+H.props.SETUP_KEY = 'oldsharedkey1234567890'; H.props.SETUP_KEY_EXPIRES = String(Date.now() + 86400e3);
+ok('[P3] the old reusable shared setup key no longer enrols phones', /not valid/.test(H.raw({ action: 'enroll', setupKey: 'oldsharedkey1234567890' }).error || ''));
+H.env.setup({ pins: DEMO_PINS });
+ok('[P3] setup() deletes the old shared key', !H.props.SETUP_KEY && !H.props.SETUP_KEY_EXPIRES);
+const legacyKey = H.env.signed_({ d: 'devH-legacy-000001', iat: 1 }, 'DEVICE_SECRET');
+ok('[P3] a phone connected before this change (no Devices row) still signs in', H.raw({ action: 'login', pin: '4444', deviceKey: legacyKey }).ok);
+const LNK4 = H.env.newSetupLink_().token; H.env.forgetAllPhones();
+ok('[P3] forgetAllPhones also cancels outstanding links', /not valid/.test(H.raw({ action: 'enroll', setupKey: LNK4, enrollId: 'phone-D-enrol-1' }).error || ''));
+
+// Device revocation (fresh backend so earlier sign-outs do not interfere)
+const V = makeBackend(); V.env.setup({ pins: DEMO_PINS });
+const vc = V.call, vdev = name => V.env.unsign_(V.deviceKey(name), 'DEVICE_SECRET').d;
+const vAdmin = vc({ action: 'login', pin: '0000', device: 'office-pc' });
+const p1 = vc({ action: 'login', pin: '1111', device: 'lost-phone' }), p2 = vc({ action: 'login', pin: '1111', device: 'spare-phone' });
+const pinBefore = V.env.row_('Users', 'lead-team1').pin;
+ok('[P4] leadman cannot disconnect phones', vc({ action: 'revokeDevice', token: p2.token, deviceId: vdev('lost-phone'), reason: 'test' }).denied === true);
+ok('[P4] a reason is required', /reason/.test(vc({ action: 'revokeDevice', token: vAdmin.token, deviceId: vdev('lost-phone'), reason: '' }).error || ''));
+ok('[P4] admin cannot disconnect the device they are using', /using now/.test(vc({ action: 'revokeDevice', token: vAdmin.token, deviceId: vdev('office-pc'), reason: 'oops' }).error || ''));
+r = vc({ action: 'revokeDevice', token: vAdmin.token, deviceId: vdev('lost-phone'), reason: 'Phone lost on site' });
+ok('[P4] admin disconnects ONE phone', r.ok && r.sessionsEnded === 1, JSON.stringify(r));
+r = vc({ action: 'load', token: p1.token });
+ok('[P4] that phone\'s session stops working and it is told to re-enrol', r.auth === true && r.notSetUp === true, JSON.stringify(r));
+ok('[P4] the same user\'s other phone keeps working', vc({ action: 'load', token: p2.token }).ok);
+ok('[P4] the user\'s PIN is unchanged', V.env.row_('Users', 'lead-team1').pin === pinBefore);
+r = V.raw({ action: 'login', pin: '1111', deviceKey: V.deviceKey('lost-phone') });
+ok('[P4] the disconnected phone cannot sign in again (even with the right PIN), audited', r.notSetUp && /disconnected/.test(r.error) && V.env.readAll_('AuditLog').some(a => a.action === 'DENIED sign-in from disconnected phone'));
+const da = V.env.readAll_('AuditLog').find(a => a.action === 'device disconnected');
+ok('[P4] disconnection audited with admin, device and reason', da && da.userId === 'admin' && da.entityId === vdev('lost-phone') && da.reason === 'Phone lost on site');
+r = vc({ action: 'devices', token: vAdmin.token });
+const lost = (r.devices || []).find(d => d.deviceId === vdev('lost-phone')), spare = (r.devices || []).find(d => d.deviceId === vdev('spare-phone'));
+ok('[P4] admin device list shows who used each phone and which are disconnected', r.ok && lost && lost.revokedAt && lost.lastUser === 'Pijay Tanjeco' && spare && !spare.revokedAt && spare.activeSessions === 1 && r.devices.some(d => d.thisDevice));
+ok('[P4] disconnecting twice is harmless', vc({ action: 'revokeDevice', token: vAdmin.token, deviceId: vdev('lost-phone'), reason: 'again' }).already === true);
+ok('[P4] leadman cannot list phones', vc({ action: 'devices', token: p2.token }).denied === true);
+
+// Audit checkpoint
+ok('[P5] audit log verifies with a checkpoint', V.env.verifyAuditLog().ok && V.env.verifyAuditLog().checkpoint);
+const AL = V.sheets.AuditLog, keep = AL.data.map(r => r.slice());
+AL.data.splice(AL.getLastRow() - 2, 2); V.env.CACHE = {};
+r = V.env.verifyAuditLog();
+ok('[P5] deleting the last audit rows is detected', !r.ok && /deleted from the end/.test(r.reason), JSON.stringify(r));
+vc({ action: 'load', token: vAdmin.token });
+vc({ action: 'login', pin: '2222', device: 'after-tamper' });
+r = V.env.verifyAuditLog();
+ok('[P5] …and stays detected after new entries are appended', !r.ok && /tamper|deleted/.test(r.reason), JSON.stringify(r));
+ok('[P5] the admin screen shows the tampering warning', /deleted from the end/.test((vc({ action: 'load', token: vAdmin.token }).auditFailures || {}).tamper || ''));
+V.env.resetAuditCheckpoint();
+ok('[P5] resetAuditCheckpoint (after checking) accepts the log as it is, audited', V.env.verifyAuditLog().ok && V.env.readAll_('AuditLog').some(a => a.action === 'audit checkpoint reset'));
+const n0 = AL.getLastRow(), swap = AL.data[n0 - 1]; AL.data[n0 - 1] = AL.data[n0 - 2]; AL.data[n0 - 2] = swap; V.env.CACHE = {};
+ok('[P5] reordered rows detected', !V.env.verifyAuditLog().ok);
+AL.data[n0 - 2] = AL.data[n0 - 1]; AL.data[n0 - 1] = swap; V.env.CACHE = {};
+ok('[P5] (restored order verifies again)', V.env.verifyAuditLog().ok);
+AL.data.splice(3, 0, AL.data[3].slice()); V.env.CACHE = {};
+ok('[P5] inserted (copied) row detected', !V.env.verifyAuditLog().ok);
+AL.data.splice(3, 1); V.env.CACHE = {};
+AL.data[4][V.env.col_('AuditLog', 'reason') - 1] = 'edited'; V.env.CACHE = {};
+ok('[P5] edited row detected', !V.env.verifyAuditLog().ok);
+AL.data.length = 0; keep.forEach(r => AL.data.push(r)); V.env.CACHE = {};
+V.props.AUDIT_CHECKPOINT = JSON.stringify({ ...JSON.parse(V.props.AUDIT_CHECKPOINT), n: 3 });
+ok('[P5] a hand-edited checkpoint is detected', /checkpoint itself was changed/.test(V.env.verifyAuditLog().reason || ''));
+
+// Old =IMAGE photo cells (public links) are rewritten once as private links by setup()
+B.env.upsert_('DailyReports', 'team2|' + today, { beforePreview: '=IMAGE("https://drive.google.com/thumbnail?id=x&sz=w800")' });
+delete B.props.PREVIEWS_PRIVATE;
+B.env.setup({ pins: DEMO_PINS });
+const anyImage = Object.values(B.sheets).some(sh => sh.data.some(row => (row || []).some(v => /^=IMAGE\(/i.test(String(v == null ? '' : v)))));
+ok('[P1] setup() rewrites old =IMAGE photo cells in every tab as private links', !anyImage);
 
 // ── Upgrade an old (v1) Sheet in place ──────────────────────────────────
 const M = makeBackend({ code: require('path').join(__dirname, 'fixtures', 'Code-v1.gs') });

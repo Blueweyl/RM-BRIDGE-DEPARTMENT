@@ -41,8 +41,8 @@ npm install
 npm run dev            # local dev server (demo mode)
 npm run build          # production files → frontend/dist/ (no demo data)
 npm run build:demo     # offline demo build (fixed demo PINs), for training / the standalone HTML
-npm run test:backend   # 185 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts)
-npm run test:e2e       # 112 end-to-end checks: leadman phones + admin computer against the real backend code
+npm run test:backend   # 246 backend checks (incl. adversarial: forged team, bad tokens, replays, conflicts, private photos, setup-link replay, device revocation, audit truncation)
+npm run test:e2e       # 123 end-to-end checks: leadman phones + admin computer against the real backend code
 ```
 
 - `src/App.jsx`: the design's logic class; lines marked `// live` hand off to `live.js`.

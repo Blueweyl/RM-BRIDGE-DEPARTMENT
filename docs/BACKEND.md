@@ -70,12 +70,13 @@ is stored with a leading `'` so Sheets never runs it as a formula.
 | **Teams** | teamId | name, short name, default unit, active |
 | **Roster** | personId (`team2-abraham-balmeo`) | teamId, name, role (Leadman/Skilled/Crew), status (Active/Archived) |
 | **Attendance** | `teamId\|date\|personId` | reportId, status (**Present/Absent/Leave/Rest Day/Sick/Other**), note (required for Other), submittedAt/By, rev |
-| **DailyReports** | `teamId\|date` | server-made **reportId**, state (draft/submitted), all form fields, crew present, photo IDs + `=IMAGE` previews, **version** (submissions), **rev** (every change), firstSubmittedAt, late, reopen reason, last request ID |
-| **Photos** | photoId | reportId, client photo ID, team, leadman, type, status (Active/Replaced/Removed), location + capture time (phone), upload time, Drive file, bytes |
+| **DailyReports** | `teamId\|date` | server-made **reportId**, state (draft/submitted), all form fields, crew present, photo IDs + links to the (private) photo files, **version** (submissions), **rev** (every change), firstSubmittedAt, late, reopen reason, last request ID |
+| **Photos** | photoId | reportId, client photo ID, team, leadman, type, status (Active/Replaced/Removed), location + capture time **as claimed by the phone (labelled not verified)**, upload time (server), Drive file, bytes |
 | **Revisions** | revisionId | JSON snapshot of the report and its attendance each time it is submitted, reopened, or its attendance changes |
 | **AuditLog** | (append-only) | who (name, role, user ID), team, action, entity + ID, report revision, before, after, reason, request ID, device, server time, **chain hash** |
 | **Sessions** | sessionId | user, role, team, device, created, expires, revoked |
-| **Accomplishment Report** | (report ID, hidden col P) | the team's "Bridge Team Accomplishment Report" layout: #, Date, From, To, Location, Activity, Status, Before/After photo (in the cell), Qty + Equipment, Qty + Manpower (crew present that day), Qty + Leadman/Driver. One row per submitted report, filled automatically; a resubmitted report updates its row. `rebuildAccomplishmentReport()` regenerates it |
+| **Devices** | deviceId | every phone connected with a setup link: label (its browser), when, which link; disconnected (when, by whom, reason) |
+| **Accomplishment Report** | (report ID, hidden col P) | the team's "Bridge Team Accomplishment Report" layout: #, Date, From, To, Location, Activity, Status, Before/After photo (link to the private file), Qty + Equipment, Qty + Manpower (crew present that day), Qty + Leadman/Driver. One row per submitted report, filled automatically; a resubmitted report updates its row. `rebuildAccomplishmentReport()` regenerates it |
 | **Bridge RM_Team 1**, **Segment 10 Scupper Drain** | (report ID, hidden col V) | the client workbook's per-team activity layout (Days, Date, From, To, Location, Activity, Activity Details, Status, Target/Actual KM, Before/After, Target/Actual EQP, Plate, Target/Actual Manpower, Team names, Target/Actual Leadman, Leadman/Driver). One row per submitted report, filled automatically |
 | **Bridge Epoxy** | (report ID, hidden col V) | both Epoxy teams in one activity tab, Target/Actual (Loc), leadman in capitals |
 | **Bridge_Conso** | (report ID, hidden col AA) | every team's reports in one list: the activity columns plus Target/Actual (KM), Target/Actual (Loc) and Month |
@@ -90,8 +91,12 @@ is stored with a leading `'` so Sheets never runs it as a formula.
 - **locked**: a leadman can change today's and yesterday's report only; admin any past day.
 - Nothing is deleted: replaced photos stay (status Replaced), a reopened report keeps a
   snapshot of the submitted version, archived crew keep their attendance.
-- `Users`, `AuditLog`, `Revisions`, `Sessions` and `Requests` are protected (warning on hand edits).
-  `verifyAuditLog()` recomputes the hash chain and reports the first row edited by hand.
+- `Users`, `AuditLog`, `Revisions`, `Sessions`, `Devices` and `Requests` are protected (warning on hand edits).
+  `verifyAuditLog()` recomputes the hash chain (catches edited, reordered or inserted rows) and compares the
+  log with the **audit checkpoint**: the latest row count + hash, HMAC-signed, kept in Script Properties
+  (outside the Sheet), updated with every entry. Rows deleted from the end, rows added by hand, or an edited
+  checkpoint are reported; the app also notices it at the next entry and the admin screen shows
+  "Audit log tampering detected" until `resetAuditCheckpoint()` is run (after checking; itself audited).
 
 ## 3. Photo storage (Google Drive)
 
@@ -105,8 +110,21 @@ Bridge NLEX Daily Report Photos/          (created by setup(), in the admin's Dr
 ```
 - The phone resizes photos to at most 1600 px, JPEG quality 0.82 (about 200–400 KB),
   before uploading. The original filename is kept in the Photos tab and in the file description.
-- `fileUrl` opens the full photo. `thumbnailUrl` (`drive.google.com/thumbnail?id=…&sz=w800`) is
-  used for previews in the app and in the Sheet (`=IMAGE(...)`).
+- **Photos are private.** Files are never shared "anyone with the link" (older versions did; `setup()` /
+  `makePhotosPrivate()` make those private again). The app shows a photo through the `photoView` action:
+  a leadman only for their own team, the admin for all teams; anyone else is refused and audited.
+  The Sheet cells are `=HYPERLINK(...)` links that open the file in Drive for its owner (the admin
+  account) and anyone it is explicitly shared with. `=IMAGE()` thumbnails are not possible with private
+  files (Sheets fetches `=IMAGE` URLs without signing in).
+- **Checked on upload**: the declared type must match the file's first bytes (JPEG/PNG/WebP), max 6 MB,
+  and the file's structure must be complete: JPEG segment chain with a frame header and scan data ending
+  exactly at the end-of-image marker; PNG header CRC and chunk chain ending exactly at IEND; WebP size
+  matching its header. Truncated files, files with anything appended (polyglots), and absurd sizes
+  (under 16 px, over 12,000 px a side or 50 megapixels) are refused and audited. Apps Script has no image
+  decoder, so pixels are not decoded; the app itself re-draws every photo on a canvas before upload.
+- **Capture time and location are the phone's claim**: kept (Photos tab, Drive description, watermark says
+  "phone time") and labelled *not verified*. The report date, upload time, audit time and every decision use
+  the server clock and the session.
 - Replacing a photo marks the old one **Replaced**. The old file stays in Drive as evidence.
 
 ## 4. API (Apps Script `doPost` actions)
@@ -124,12 +142,13 @@ All times stored by the server are Manila time from the server clock; `login` an
 
 | Action | Who | Does |
 |---|---|---|
-| `enroll {setupKey}` | phone with a valid, unexpired setup link | Returns a signed per-phone **device key**; the phone then deletes the setup key |
+| `enroll {setupKey, enrollId}` | phone with an unused, unexpired single-use setup link | Returns a signed per-phone **device key** and lists the phone in Devices; the phone then deletes the link. The link is spent: another phone using it is refused and audited; the same phone (same random `enrollId`) retrying after a lost reply gets the same device key back |
 | `login {pin, deviceKey}` | enrolled phone | Checks the PIN hash, creates a Sessions row, returns a signed token |
 | `logout` | signed in | Revokes the session |
 | `load {days, outbox?}` | admin: all teams · leadman: own team | Teams, roster, attendance, reports, active photos, `serverTime`. A leadman's phone sends a summary of what it still holds unsent (`outbox`); admin gets every team's summary (`phoneQueue`), the Sheet link and any audit-write failures |
 | `saveAttendance {teamId, reportDate, people[], baseRev, reason?}` | own team / admin | Every active crew member needs an explicit status; Other needs a note; unknown people refused. Locked for everyone once the report is submitted (reopen first). Changing attendance already submitted needs a `reason` (`needReason`); the audit entry holds each person's old and new status. Sending the same marks again → `unchanged`, no new revision |
-| `uploadPhoto {teamId, reportDate, type, clientId, dataUrl, capturedAt, location}` | own team / admin | JPEG/PNG/WebP only, checked from the file's own bytes (not just the declared type), 6 MB max. Same `clientId` again → same photo back (no duplicate). Saves to Drive, links it to the reportId |
+| `uploadPhoto {teamId, reportDate, type, clientId, dataUrl, capturedAt, location}` | own team / admin | JPEG/PNG/WebP only, checked from the file's own bytes and structure (section 3), 6 MB max. Same `clientId` again → same photo back (no duplicate). Saves to Drive (private), links it to the reportId |
+| `photoView {photoId}` | own team / admin | The photo file's bytes (as a data URL) for the app's preview; other teams refused and audited |
 | `removePhoto {teamId, reportDate, photoId}` | own team / admin | The photo must belong to that report; marked Removed (file kept) |
 | `submitReport {teamId, reportDate, report, baseRev, beforePhotoId/beforeClientId, afterPhotoId/afterClientId}` | own team / admin | Re-checks every rule (below); the photos named (server ID, or the phone's own photo ID for a report queued offline) must be the report's active ones; version+1, revision snapshot, audit before/after |
 | `reopenReport {teamId, reportDate, reason, baseRev}` | own team (today/yesterday) / admin | Reason required; snapshot of the submitted version kept |
@@ -137,6 +156,7 @@ All times stored by the server are Manila time from the server clock; `login` an
 | `exportCsv {from, to}` | admin | CSV for up to 366 days with the stable **Report ID, Revision and Version** on every row, formula-safe cells. The same rows are written to a new Sheet in the photo folder's `Exports` subfolder for the `.xlsx` link (so the .xlsx never contains Users, Sessions or AuditLog) |
 | `adminReports {from, to}` | admin | Every team × day: submitted/draft/missing, late/overdue, attendance and photo completeness, revision number and count, refused conflicting writes, reopened-not-resubmitted, and work still on the phone (pending, conflict, refused, failed upload) |
 | `revisions {reportId}` / `auditLog {from, to, teamId}` | admin | Revision history of one report / audit log viewer |
+| `devices` / `revokeDevice {deviceId, reason}` | admin | Connected phones (label, when, last sign-in and user, active sessions) / disconnect ONE phone: its sessions end, it cannot sign in again without a new setup link; the user's PIN and other phones are unaffected; audited with the reason. The admin cannot disconnect the device they are using |
 
 **Report rules enforced by the server** (the phone shows the same list before sending):
 valid `HH:mm` times with From before To; location, details, plate required (length limits);
@@ -147,15 +167,17 @@ always; After photo when Complete; attendance submitted first, covering everyone
 that day (someone added after attendance was sent must be marked before the report goes in).
 
 Maintenance functions to run from the Apps Script editor: `setup()` (also upgrades an older
-Sheet), `showSetupLink()`, `newSetupKey()`, `signOutEveryone()`, `forgetAllPhones()`,
-`clearLoginLock()`, `verifyAuditLog()`, `clearAuditFailures()`. If an audit entry ever cannot be
+Sheet), `showSetupLink()`, `cancelSetupLinks()`, `signOutEveryone()`, `forgetAllPhones()`,
+`makePhotosPrivate()`, `clearLoginLock()`, `verifyAuditLog()`, `resetAuditCheckpoint()`, `clearAuditFailures()`. If an audit entry ever cannot be
 written, the admin screen says so (count, time, error) until `clearAuditFailures()` is run.
 
 ## 5. Sign-in and roles
 
-- **Setup link** → `https://<app>/?backend=<web app URL>&key=<setup key>`, valid for 7 days
-  (`showSetupLink()` makes a new one when it has expired). On first open the phone swaps the
-  key for its own signed **device key** and deletes the setup key from storage and the address bar.
+- **Setup link** → `https://<app>/?backend=<web app URL>&key=<token>`: one link per phone, **single use**,
+  valid for 24 hours (`showSetupLink()` prints a new one each run). Only a keyed hash of the token is kept
+  (Script Properties). On first open the phone swaps it for its own signed **device key** and deletes it
+  from storage and the address bar. A used, expired, altered or cancelled link cannot connect a phone;
+  reusing a used link is audited. Phones connected before this change keep their device key.
 - **PIN** (4 digits) → checked against an HMAC hash in the Users tab. To change a PIN, type
   4 new digits into the cell; it is hashed at the next sign-in. The server creates a
   **Sessions** row and returns a signed token (HMAC-SHA256, secret in Script Properties):
@@ -166,10 +188,11 @@ written, the admin screen says so (count, time, error) until `clearAuditFailures
   of the phone that signed in** (a token copied to another phone or tool is refused and audited).
 - **Brute-force protection**: 5 wrong PINs lock that phone for 15 min; 20 wrong PINs across
   all phones in 15 min pause sign-in for everyone (logged in the audit log; `clearLoginLock()`
-  lifts it). Wrong setup keys are rate-limited separately and cannot lock PIN sign-in.
+  lifts it). Wrong setup links are rate-limited separately and cannot lock PIN sign-in.
 - **Revoking access**: change the PIN or set Active = No (that person, everywhere) ·
-  **Log out** (that session) · `signOutEveryone()` · `newSetupKey()` (old links stop enrolling)
-  · `forgetAllPhones()` (every phone needs a new setup link).
+  **Log out** (that session) · **Admin → Phones → Disconnect** (one phone; PIN unchanged) ·
+  `signOutEveryone()` · `cancelSetupLinks()` (unused links stop working) · `forgetAllPhones()`
+  (every phone needs a new setup link).
 - **Roles**: **Leadman** reads and writes only their own team, today and yesterday; cannot
   change the roster, export, or see other teams, history across teams or the audit log.
   **Admin** reads and writes every team and past day, manages the roster, exports, sees
@@ -265,8 +288,8 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 185 backend checks, incl. adversarial cases
-cd frontend && npm run test:e2e                     # 112 end-to-end checks: phones + admin in real browsers
+node google-apps-script/test/backend.test.cjs      # 246 backend checks, incl. adversarial cases
+cd frontend && npm run test:e2e                     # 123 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake
 tokens, duplicate submit, double tap, offline → reconnect, failed photo upload, edited

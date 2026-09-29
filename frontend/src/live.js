@@ -436,7 +436,9 @@ export const liveMethods = {
           const cur = ph[k];
           if (cur && cur.pending) return;                           // taken offline, not uploaded yet
           const p = d.photos.find(x => x.teamId === id && x.reportDate === today && x.type === k);
-          ph[k] = p ? { name: p.originalFilename || k + '.jpg', time: api.timeOf(p.uploadedAt), url: cur && cur.photoId === p.photoId && cur.url ? cur.url : p.thumbnailUrl, photoId: p.photoId, clientId: p.clientId, uploaded: true } : null;
+          // Photos are private in Drive: the preview is fetched through the signed-in API (loadServerPhotos).
+          const url = !p ? null : cur && cur.photoId === p.photoId && cur.url ? cur.url : (this._photoCache || {})[p.photoId] || null;
+          ph[k] = p ? { name: p.originalFilename || k + '.jpg', time: api.timeOf(p.uploadedAt), url, photoId: p.photoId, clientId: p.clientId, uploaded: true } : null;
         });
         next.photos[id] = ph;
         Object.keys(arch).forEach(k => { if (arch[k].teamId === id) delete arch[k]; });
@@ -453,8 +455,31 @@ export const liveMethods = {
       // Forget conflict-check bases from earlier days that have nothing queued.
       Object.keys(this._base).forEach(k => { if (!k.endsWith('|' + today) && !this._ob[k]) this.baseSet(k, null); });
       this.persist(); this.lsSet('archive', this.arch);
+      this.loadServerPhotos();
       if (done) done();
     });
+  },
+
+  /** Previews of uploaded photos, read through the API (the files are private; the server checks the team). */
+  async loadServerPhotos() {
+    this._photoCache = this._photoCache || {};
+    this._photoFetching = this._photoFetching || {};
+    for (const t of this.constructor.T) for (const k of ['before', 'after']) {
+      const p = this.state.photos[t.id] && this.state.photos[t.id][k];
+      if (!p || !p.uploaded || !p.photoId || p.url || this._photoFetching[p.photoId] || !api.session() || !api.online()) continue;
+      this._photoFetching[p.photoId] = true;
+      try {
+        const r = await api.call('photoView', { photoId: p.photoId }, { timeout: 60000 });
+        if (typeof r.dataUrl !== 'string' || !/^data:image\/(jpeg|png|webp);base64,/.test(r.dataUrl)) continue;
+        this._photoCache[p.photoId] = r.dataUrl;
+        this.setState(s => {
+          const cur = s.photos[t.id] && s.photos[t.id][k];
+          if (!cur || cur.photoId !== p.photoId || cur.url) return null;
+          return { photos: { ...s.photos, [t.id]: { ...s.photos[t.id], [k]: { ...cur, url: r.dataUrl } } } };
+        });
+      } catch (e) { /* preview only: the photo itself is safe on the server; tried again on the next refresh */ }
+      finally { delete this._photoFetching[p.photoId]; }
+    }
   },
 
   /** Previews of photos waiting to upload are kept in IndexedDB; put them back on screen after a reload. */
@@ -527,7 +552,7 @@ export const liveMethods = {
   watermark(id, key, captured) {
     const t = this.constructor.T.find(x => x.id === id), f = this.state.forms[id];
     const u = this.state.user;
-    return [`${key === 'before' ? 'BEFORE' : 'AFTER'} WORK · ${t.short} · NLEX`, `${captured} (Manila) · ${u ? u.name : t.leadman}`, (f.location || '').trim() || 'Location not entered yet'];
+    return [`${key === 'before' ? 'BEFORE' : 'AFTER'} WORK · ${t.short} · NLEX`, `${captured} phone time (Manila) · ${u ? u.name : t.leadman}`, (f.location || '').trim() || 'Location not entered yet'];
   },
 
   async liveOnFile(id, key, f) {
@@ -769,4 +794,19 @@ export const liveMethods = {
   liveAdminReports() { const { from, to } = this.state.adminRange; return this.liveAdminCall('reports', 'adminReports', { from, to }); },
   liveAuditLog() { const { from, to } = this.state.adminRange; return this.liveAdminCall('audit', 'auditLog', { from, to, teamId: this.state.adminTab === 'all' ? '' : this.state.adminTab }); },
   liveRevisions(reportId) { return this.liveAdminCall('revisions', 'revisions', { reportId }); },
+  liveDevices() { return this.liveAdminCall('devices', 'devices', {}); },
+  /** Disconnect one phone (lost, stolen, shared). Its user's PIN and other phones are not affected. */
+  async liveRevokeDevice(d) {
+    const reason = (window.prompt(`Disconnect this phone?\n${d.label || d.deviceId}${d.lastUser ? '\nLast used by ' + d.lastUser : ''}\n\nIt is signed out now and needs a new setup link. The PIN does not change. Reason (kept in the audit log):`) || '').trim();
+    if (!reason) return;
+    if (reason.length < 3) return this.toast('Phone NOT disconnected — give a reason (3+ letters)', 'err');
+    if (!api.online()) return this.toast('No signal — try again when you have signal', 'err');
+    this.setState({ busy: 'devices' });
+    try {
+      const r = await api.call('revokeDevice', { deviceId: d.deviceId, reason });
+      this.toast(r.already ? 'That phone was already disconnected' : `Phone disconnected (${r.sessionsEnded} sign-in${r.sessionsEnded === 1 ? '' : 's'} ended)`, 'info');
+    } catch (e) { this.liveError(e); }
+    finally { this.setState({ busy: null }); }
+    return this.liveDevices();
+  },
 };

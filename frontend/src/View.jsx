@@ -396,6 +396,12 @@ function ActivityTab({ cur }) {
 
           <div style={css(CARD)}>
             <Step n="2" title="Work done" />
+            <label style={css(LABEL)}>Quick activity template
+              <select aria-label="Quick activity template" value="" onChange={cur.onTemplate} style={css('width:100%;min-height:48px;padding:0 10px;border:1.5px solid #C9D1DB;border-radius:8px;font-size:16px;color:#0F2540;background:#FFFFFF;')}>
+                <option value="">Choose a template (you can edit it after)…</option>
+                {cur.templates.map(tp => <option key={tp} value={tp}>{tp}</option>)}
+              </select>
+            </label>
             <label style={css(LABEL)}>Activity details
               <textarea rows="3" placeholder="What did the crew do today?" value={cur.form.details} onChange={cur.set.details} style={css(cur.fs.details)} />
             </label>

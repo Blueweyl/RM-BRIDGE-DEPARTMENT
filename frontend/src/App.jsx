@@ -6,6 +6,7 @@ import React from 'react';
 import View from './View.jsx';
 import * as api from './api.js';
 import { liveMethods, teamsFrom } from './live.js';
+import { templatesFor } from './templates.js';
 import { DEMO_TEAMS, demoSignIn, DemoPins } from './demo.jsx';
 
 // The demo (its PINs, sample crews and reports) lives only in demo.jsx and exists only in demo builds:
@@ -643,6 +644,15 @@ export default class Component extends React.Component {
       cur = { ...t, initials: this.initials(t.leadman), chip: CH[st][0], chipStyle: this.chip(st), steps, tabs,
         onActivity: tab === 'activity', onAttendance: tab === 'attendance', onHistory: tab === 'history',
         form: f, set, fs, photoList,
+        // Quick activity template: fills Activity details (still editable). Asks before replacing typed text.
+        templates: templatesFor(id),
+        onTemplate: e => {
+          const val = e.target.value; e.target.value = '';
+          if (!val || locked) return;
+          const typed = (this.state.forms[id].details || '').trim();
+          if (typed && typed !== val && !window.confirm('Replace the activity details you typed with this template?')) return;
+          this.up('forms', id, o => ({ ...o, details: val })); this.scheduleAutosave(id);
+        },
         ongoingStyle: seg(f.status === 'ONGOING', '#B35F00') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''), completeStyle: seg(f.status === 'COMPLETE', '#17693F') + (locked ? 'cursor:not-allowed;opacity:0.6;' : ''),
         isOngoing: f.status === 'ONGOING', isComplete: f.status === 'COMPLETE',
         isKM: f.unit !== 'Locations', isLoc: f.unit === 'Locations',

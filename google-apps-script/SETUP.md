@@ -82,6 +82,7 @@ Host it anywhere that serves plain files over **https**, for example:
 | See every version of a report | Admin screen → **Show reports** → **History**, or the **Revisions** tab |
 | Work stuck on a phone | Admin screen → **Needs attention** ("On the phone: …") or **Show reports** ("On phone, not synced", "Conflict ×N"). Ask the leadman to open the app with signal. |
 | "Audit log entries could not be written" warning | Check the AuditLog tab is intact (**verifyAuditLog**), then run **clearAuditFailures** |
+| Accomplishment Report tab | Filled automatically, one row per submitted report, in the weekly report layout. If it is edited by hand or rows get mixed up, run **rebuildAccomplishmentReport** to regenerate it from the reports. |
 | .xlsx exports | Each export also makes a small Sheet in the photo folder's **Exports** subfolder (only the exported rows). Delete old ones whenever you like. |
 
 ## Do not

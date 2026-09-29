@@ -11,6 +11,7 @@
  *   Revisions     snapshot of a report each time it is submitted, reopened or its attendance changes
  *   AuditLog      append-only, hash-chained: who did what, when, before/after, reason
  *   Sessions      one row per sign-in; revoked on logout, PIN change or signOutEveryone()
+ *   Accomplishment Report   the team's weekly report layout, one row per submitted report (filled automatically)
  *   Requests      idempotency ledger: every accepted write's request ID and its answer (a retry gets the same answer)
  * Photos live in Drive: "Bridge NLEX Daily Report Photos/<yyyy-mm-dd>/<team>/".
  *
@@ -185,6 +186,7 @@ function setup(options) {
   // Upgrading: phones already holding the old setup link get a week to switch to a device key.
   else if (!props.getProperty('SETUP_KEY_EXPIRES')) props.setProperty('SETUP_KEY_EXPIRES', String(Date.now() + SETUP_KEY_DAYS * 86400000));
   photoRoot_();
+  accSheet_();
   audit_({ name: 'setup', role: 'system' }, '', 'setup', 'system', '', null, null, 'setup() run');
   Logger.log('Setup complete. Write the PINs above down now — the Users tab only keeps a hash.');
   Logger.log('Next: Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), then run showSetupLink.');
@@ -236,6 +238,18 @@ function clearLoginLock() { PropertiesService.getScriptProperties().deleteProper
 
 /** After checking the cause, clear the "audit entries could not be written" warning on the admin screen. */
 function clearAuditFailures() { PropertiesService.getScriptProperties().deleteProperty('AUDIT_FAILURES'); }
+
+/** Rebuild the Accomplishment Report tab from every submitted report (e.g. after editing it by hand). */
+function rebuildAccomplishmentReport() {
+  CACHE = {};
+  var sh = accSheet_(), last = sh.getLastRow();
+  if (last > ACC_FIRST_ROW - 1) sh.getRange(ACC_FIRST_ROW, 1, last - ACC_FIRST_ROW + 1, ACC_HEAD.length).clearContent();
+  var reps = readAll_('DailyReports').filter(function (r) { return r.state === 'submitted' || Number(r.version) > 0; })
+    .sort(function (a, b) { return (a.reportDate + (a.firstSubmittedAt || '')).localeCompare(b.reportDate + (b.firstSubmittedAt || '')); });
+  reps.forEach(function (r) { accWrite_(r); });
+  Logger.log('Accomplishment Report rebuilt: ' + reps.length + ' rows.');
+  return reps.length;
+}
 
 /** Check the audit log has not been edited by hand. Logs the first broken row, if any. */
 function verifyAuditLog() {
@@ -909,6 +923,7 @@ function submitReport_(s, req) {
   upsert_('DailyReports', key, row);
   var rep = row_('DailyReports', key);
   revision_(s, rep, 'submitted', row.version === '1' ? '' : changes.join('; '));
+  accUpdate_(s, rep);
   audit_(s.user, teamId, row.version === '1' ? 'report submitted' : 'report resubmitted (v' + row.version + ')', 'report', rep.reportId,
     old.version > 0 ? beforeVals : null, afterVals, (old.reopenReason && row.version !== '1' ? 'Reopened because: ' + old.reopenReason + ' — ' : '') + (changes.length ? changes.join('; ') : (row.version === '1' ? clean.status + ' · ' + short_(clean.location) : 'no field changes')), row.rev);
   return { ok: true, submittedAt: now, submittedBy: s.user.name, version: row.version, rev: row.rev, reportId: rep.reportId, late: row.late };
@@ -927,6 +942,73 @@ function reopenReport_(s, req) {
   upsert_('DailyReports', key, { state: 'draft', updatedAt: now_(), editedBy: s.user.name, rev: rev, reopenReason: reason, lastRequestId: REQ.requestId });
   audit_(s.user, teamId, 'report reopened for editing', 'report', old.reportId, { state: 'submitted', version: old.version, rev: old.rev }, { state: 'draft', rev: rev }, reason, rev);
   return { ok: true, rev: rev };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Accomplishment Report tab — same layout as the team's "Bridge Team Accomplishment Report"
+// (Weekly Report) sheet, filled automatically: one row per submitted report, updated in place
+// when a report is edited and submitted again. Column P (hidden) holds the report ID.
+// ════════════════════════════════════════════════════════════════════════════
+
+var ACC_TAB = 'Accomplishment Report';
+var ACC_TITLE = 'Bridge Team Accomplishment Report | NLEX';
+var ACC_HEAD = ['#', 'Date', 'From', 'To', 'Location', 'Activity', 'Status', 'Before', 'After', 'Qty', 'Equipment', 'Qty', 'Manpower', 'Qty', 'Leadman/Driver', 'Report ID'];
+var ACC_FIRST_ROW = 4;
+
+/** The tab, created with its title and two header rows if missing. Never clears existing rows. */
+function accSheet_() {
+  var ss = db_(), sh = ss.getSheetByName(ACC_TAB);
+  if (sh && sh.getLastRow() >= 3) return sh;
+  if (!sh) sh = ss.insertSheet(ACC_TAB);
+  var navy = '#0F2540';
+  sh.getRange(1, 1, 1, 15).merge().setValue(ACC_TITLE).setFontWeight('bold').setFontSize(14).setHorizontalAlignment('center').setBackground(navy).setFontColor('#FFFFFF');
+  sh.getRange(2, 1, 1, 16).setValues([['#', 'Schedule', '', '', 'Activities', '', '', 'Photos', '', 'Actual Resources Deploy for the Week', '', '', '', '', '', '']]);
+  [[2, 2, 3], [2, 5, 3], [2, 8, 2], [2, 10, 6]].forEach(function (m) { sh.getRange(m[0], m[1], 1, m[2]).merge(); });
+  sh.getRange(3, 1, 1, ACC_HEAD.length).setValues([ACC_HEAD]);
+  sh.getRange(2, 1, 2, ACC_HEAD.length).setFontWeight('bold').setHorizontalAlignment('center').setBackground('#DDE4EE').setFontColor(navy);
+  sh.setFrozenRows(3);
+  [40, 90, 55, 55, 220, 260, 90, 130, 130, 40, 90, 40, 200, 40, 130].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  sh.hideColumns(16);
+  return sh;
+}
+
+/** Row values for one report, in the tab's column order. */
+function accValues_(r) {
+  var photos = {};
+  readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
+  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
+  // Who was present that day (including anyone removed from the crew since), leadman in his own column.
+  var crew = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate && a.status === 'Present' && a.role !== 'Leadman'; })
+    .map(function (a) { return safeCell_(a.name); });
+  return [r.reportDate, r.fromTime, r.toTime, safeCell_(r.location), safeCell_(r.activityDetails), String(r.status || '').toUpperCase(),
+    img(r.beforePhotoId), img(r.afterPhotoId), r.plateNumber ? '1' : '', safeCell_(r.plateNumber), String(crew.length), crew.join('\n'), r.leadman ? '1' : '', safeCell_(r.leadman), r.reportId];
+}
+
+/** Write (or rewrite) the row for this report. */
+function accWrite_(r) {
+  var sh = accSheet_(), last = sh.getLastRow(), row = 0;
+  if (last >= ACC_FIRST_ROW) {
+    var ids = sh.getRange(ACC_FIRST_ROW, 16, last - ACC_FIRST_ROW + 1, 1).getDisplayValues();
+    for (var i = 0; i < ids.length; i++) if (ids[i][0] === r.reportId) { row = ACC_FIRST_ROW + i; break; }
+  }
+  if (!row) row = Math.max(last + 1, ACC_FIRST_ROW);
+  if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 200);
+  var v = accValues_(r);
+  // Text format keeps dates, times and plate numbers exactly as entered; the photo columns stay General for =IMAGE().
+  sh.getRange(row, 1, 1, ACC_HEAD.length).setNumberFormats([ACC_HEAD.map(function (h, i) { return i === 7 || i === 8 ? 'General' : '@'; })]);
+  sh.getRange(row, 1, 1, ACC_HEAD.length).setValues([[String(row - ACC_FIRST_ROW + 1)].concat(v)]);
+  sh.getRange(row, 1, 1, ACC_HEAD.length).setVerticalAlignment('middle').setWrap(true);
+  sh.setRowHeight(row, 110);
+  return row;
+}
+
+/** After a report is submitted: update its row. A failure here never undoes the submit, but is recorded. */
+function accUpdate_(s, rep) {
+  try { accWrite_(rep); }
+  catch (e) {
+    Logger.log('Accomplishment Report update failed: ' + e);
+    audit_(s.user, rep.teamId, 'accomplishment report update failed', 'report', rep.reportId, null, null, String(e && e.message || e).slice(0, 300), rep.rev);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

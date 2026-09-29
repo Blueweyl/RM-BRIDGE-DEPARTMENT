@@ -23,13 +23,15 @@ function makeBackend(opts = {}) {
     put(i, j, v) { if (this.r + i > this.sh.maxRows) throw new Error('Range out of bounds'); while (this.sh.data.length < this.r + i) this.sh.data.push([]); this.sh.data[this.r - 1 + i][this.c - 1 + j] = v; }
     setValues(vs) { if (vs.length !== this.nr || vs[0].length !== this.nc) throw new Error('setValues size mismatch'); vs.forEach((row, i) => row.forEach((v, j) => this.put(i, j, v))); return this; }
     setNumberFormats() { return this; } setFontWeight() { return this; } setBackground() { return this; } setFontColor() { return this; }
+    setValue(v) { this.put(0, 0, v); return this; } merge() { return this; } setFontSize() { return this; } setHorizontalAlignment() { return this; }
+    setVerticalAlignment() { return this; } setWrap() { return this; } clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) if (this.at(i, j) !== undefined) this.put(i, j, ''); return this; }
   }
   class Sheet {
     constructor(name) { this.name = name; this.data = []; this.maxRows = 1000; }
     getRange(r, c, nr, nc) { return new Range(this, r, c, nr, nc); }
     getLastRow() { let n = this.data.length; while (n > 0 && !(this.data[n - 1] || []).some(v => cellStr(v) !== '')) n--; return n; }
     getMaxRows() { return this.maxRows; } insertRowsAfter(a, n) { this.maxRows += n; }
-    setFrozenRows() {} setColumnWidth() {} setRowHeight() {}
+    setFrozenRows() {} setColumnWidth() {} setRowHeight() {} hideColumns() {}
     deleteRow(r) { this.data.splice(r - 1, 1); }
     getLastColumn() { return Math.max(0, ...this.data.slice(0, this.getLastRow()).map(r => { let n = r.length; while (n > 0 && cellStr(r[n - 1]) === '') n--; return n; })); }
     clearContents() { this.data = []; return this; }

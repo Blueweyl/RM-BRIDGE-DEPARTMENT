@@ -258,6 +258,24 @@ ok('an audit entry that cannot be written is never silent (admin warned)', AQ.au
 B.env.clearAuditFailures();
 ok('no demo PINs in the backend code', !/'(0000|1111|2222|3333|4444)'/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'Code.gs'), 'utf8')));
 
+// ── Accomplishment Report tab (the team's weekly report layout, filled automatically) ──
+const ACC = B.sheets['Accomplishment Report'];
+const accRows = () => ACC.data.slice(3).filter(r => r && r[15]);
+ok('Accomplishment Report tab has the report layout (title, groups, 15 columns + hidden report ID)', ACC && String(ACC.data[0][0]).startsWith('Bridge Team Accomplishment Report')
+  && ACC.data[1][1] === 'Schedule' && ACC.data[1][4] === 'Activities' && ACC.data[1][7] === 'Photos' && ACC.data[1][9] === 'Actual Resources Deploy for the Week'
+  && ACC.data[2].slice(0, 15).join('|') === '#|Date|From|To|Location|Activity|Status|Before|After|Qty|Equipment|Qty|Manpower|Qty|Leadman/Driver', ACC && JSON.stringify(ACC.data.slice(0, 3)));
+const a2 = accRows().find(r => r[15] === reportId), rep2 = B.env.row_('DailyReports', 'team2|' + today);
+ok('each submitted report fills a row automatically', a2 && a2[1] === today && a2[2] === '07:00' && a2[3] === '16:00' && a2[4] === 'Km.12' && a2[5] === form.activityDetails && a2[6] === 'COMPLETE' && a2[10] === 'NKU 8624' && a2[14] === 'Glenn Butiong', JSON.stringify(a2));
+ok('…with before/after photos shown in the cells', /^=IMAGE\("https:\/\/drive\.google\.com\/thumbnail/.test(a2[7]) && /^=IMAGE\(/.test(a2[8]));
+ok('…and the crew present (names + count, leadman in his own column)', a2[11] === String(a2[12].split('\n').length) && !a2[12].includes('Glenn Butiong') && a2[12].includes('Ian Enriquez') && !a2[12].includes('Rolando Faustino') && a2[13] === '1', a2[11] + ' / ' + a2[12]);
+ok('an edited and resubmitted report updates its row (no duplicate row)', accRows().filter(r => r[15] === reportId).length === 1 && a2[4] === rep2.location);
+ok('rows are numbered like the original (#)', accRows().map(r => r[0]).join() === accRows().map((r, i) => String(i + 1)).join() && accRows().length === 2, accRows().map(r => r[0] + ':' + r[15]).join());
+const before = JSON.stringify(accRows());
+B.env.setup({ pins: DEMO_PINS });
+ok('running setup() again keeps the tab and its rows', JSON.stringify(accRows()) === before);
+const nReb = B.env.rebuildAccomplishmentReport();
+ok('rebuildAccomplishmentReport() regenerates the same rows from the reports', nReb === 2 && JSON.stringify(accRows()) === before, nReb + ' ' + JSON.stringify(accRows().map(r => r.slice(0, 7))) + ' vs ' + JSON.stringify(JSON.parse(before).map(r => r.slice(0, 7))));
+
 // ── Roster ──────────────────────────────────────────────────────────────
 r = call({ action: 'addMember', token: T.admin, teamId: 'team2', name: '  Juan  Dela Cruz ' });
 ok('admin adds crew', r.ok && r.personId === 'team2-juan-dela-cruz');

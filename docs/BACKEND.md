@@ -77,6 +77,11 @@ is stored with a leading `'` so Sheets never runs it as a formula.
 | **Sessions** | sessionId | user, role, team, device, created, expires, revoked |
 | **Accomplishment Report** | (report ID, hidden col P) | the team's "Bridge Team Accomplishment Report" layout: #, Date, From, To, Location, Activity, Status, Before/After photo (in the cell), Qty + Equipment, Qty + Manpower (crew present that day), Qty + Leadman/Driver. One row per submitted report, filled automatically; a resubmitted report updates its row. `rebuildAccomplishmentReport()` regenerates it |
 | **Bridge RM_Team 1**, **Segment 10 Scupper Drain** | (report ID, hidden col V) | the client workbook's per-team activity layout (Days, Date, From, To, Location, Activity, Activity Details, Status, Target/Actual KM, Before/After, Target/Actual EQP, Plate, Target/Actual Manpower, Team names, Target/Actual Leadman, Leadman/Driver). One row per submitted report, filled automatically |
+| **Bridge Epoxy** | (report ID, hidden col V) | both Epoxy teams in one activity tab, Target/Actual (Loc), leadman in capitals |
+| **Bridge_Conso** | (report ID, hidden col AA) | every team's reports in one list: the activity columns plus Target/Actual (KM), Target/Actual (Loc) and Month |
+| **Monthly Summary(Raw)** | — | one row per report (Date, Month, Activity, accomplishment, EQP, manpower, leadman, Loc) + Grand Total; rewritten on each submit |
+| **Summary per Activity** | — | the client's pivot: totals per activity as live SUMIFS over Bridge_Conso; type a month name (or All) in B1 |
+| **Attendance Epoxy 1-2** | — | the attendance grid with both Epoxy crews (18 required), 5 equipment items with codes, 2 service vehicles |
 | **Attendance Bridge RM**, **Attendance Segment 10** | — | the client's attendance grid: crew × day (1 present, 0 not present, blank no report), 1 driver + 2 skilled + 6 crew slots, totals, equipment and vehicle rows. Rewritten whenever attendance or the crew changes. Names come from the Roster's **Report Name** column (LAST, FIRST M.). `rebuildClientTabs()` regenerates these tabs |
 | **Requests** | user \| action \| requestId | idempotency ledger: every accepted write's request ID, a hash of its data and the answer. A retry gets the same answer; the same ID with different data is refused |
 
@@ -260,7 +265,7 @@ The server trusts nothing the phone says about identity, team, role, state, tota
 
 Automated tests (run before every change):
 ```sh
-node google-apps-script/test/backend.test.cjs      # 179 backend checks, incl. adversarial cases
+node google-apps-script/test/backend.test.cjs      # 185 backend checks, incl. adversarial cases
 cd frontend && npm run test:e2e                     # 112 end-to-end checks: phones + admin in real browsers
 ```
 The adversarial cases covered: forged teamId, leadman calling admin actions, expired/fake

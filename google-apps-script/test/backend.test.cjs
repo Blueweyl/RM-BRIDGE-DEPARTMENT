@@ -278,7 +278,7 @@ ok('rebuildAccomplishmentReport() regenerates the same rows from the reports', n
 
 // ── Client report tabs (per-team activity tab + attendance grid) ────────
 const TR = B.sheets['Segment 10 Scupper Drain'], AT = B.sheets['Attendance Segment 10'];
-ok('client tabs created by setup', ['Bridge RM_Team 1', 'Segment 10 Scupper Drain', 'Attendance Bridge RM', 'Attendance Segment 10'].every(n => B.sheets[n]), Object.keys(B.sheets).join());
+ok('client tabs created by setup', ['Bridge RM_Team 1', 'Segment 10 Scupper Drain', 'Bridge Epoxy', 'Attendance Bridge RM', 'Attendance Segment 10', 'Attendance Epoxy 1-2', 'Bridge_Conso', 'Summary per Activity', 'Monthly Summary(Raw)'].every(n => B.sheets[n]), Object.keys(B.sheets).join());
 ok('activity tab has the client columns', TR.data[0].slice(0, 21).join('|') === 'Days|Date|From|To|Location |Activity|Activity Details|Status|Target (KM)\nStation|Actual (KM)\nStation|Before|After|Target (EQP)|Actual (EQP|Plate Number|Target (Manpower)|Actual (Manpower)|Team|Target (Leadman)|Actual (Leadman)|Leadman/Driver', JSON.stringify(TR.data[0]));
 const trRows = TR.data.slice(1).filter(r => r && r[21]);
 const wd = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(today + 'T12:00:00Z').getUTCDay()];
@@ -294,6 +294,27 @@ ok('attendance grid: 1 = present, 0 = leave/other; no data = blank', mark('BUTIO
 const rowOf = label => AT.data.find(r => r && String(r[0]).startsWith(label));
 ok('attendance grid totals: required 9, driver 1, skilled, non-skilled', rowOf('TOTAL MANPOWER REQUIRED')[col] === 9 && rowOf('Driver')[col] === 1 && rowOf('Skilled labor')[col] === 2 && rowOf('Non-Skilled labor')[col] === 4, [rowOf('TOTAL')[col], rowOf('Driver')[col], rowOf('Skilled')[col], rowOf('Non-Skilled')[col]].join());
 ok('attendance grid: equipment and vehicle rows', AT.data.some(r => r && r[0] === 'BRIDGE SEG 10 EQUIPMENT') && AT.data.find(r => r && r[1] === 'Grass Cutter')[col] === 1 && AT.data.find(r => r && r[1] === 'NKU 8624')[col] === 1);
+// Epoxy: both teams in one activity tab and one attendance grid.
+const EP = B.sheets['Bridge Epoxy'], rep3 = B.env.row_('DailyReports', 'team3|' + today);
+const ep = EP.data.slice(1).find(r => r && r[21] === rep3.reportId);
+ok('Bridge Epoxy tab: Target/Actual (Loc), Activity = team, leadman in capitals', EP.data[0][8] === 'Target (Loc)' && ep && ep[5] === 'Bridge Epoxy 1' && ep[8] === '3' && ep[9] === '2' && ep[20] === 'ALLAN MIRANDA', JSON.stringify(ep));
+const AE = B.sheets['Attendance Epoxy 1-2'], aeCol = AE.data[1].indexOf(today);
+ok('Attendance Epoxy 1-2: two team blocks, 18 required, 5 equipment with codes, 2 vehicles', AE.data[3][2] === 'MIRANDA, ALLAN P.' && AE.data.some(r => r && r[2] === 'RIVERA, GILBERT O.')
+  && AE.data.find(r => r && r[0] === 'TOTAL MANPOWER REQUIRED')[aeCol] === 18 && AE.data.find(r => r && r[1] === 'Wagner Epoxy injection pump')[2] === 'RM-IJM-01'
+  && AE.data.find(r => r && r[1] === 'EPOXY 1 - NCG 5500')[aeCol] === 1 && AE.data.find(r => r && r[1] === 'EPOXY 2 - NEO 5124')[aeCol] === '', JSON.stringify(AE.data.map(r => r && r.slice(0, 3))));
+ok('…a crew member removed after working still appears on the days they worked', AE.data.some(r => r && r[2] === 'PENDUKO, PEDRO' && r[aeCol] === 1));
+// Bridge_Conso: every team's reports, with KM / Station / Loc split out and the month.
+const CO = B.sheets['Bridge_Conso'], coRows = CO.data.slice(1).filter(r => r && r[26]);
+const co2 = coRows.find(r => r[26] === reportId), co3 = coRows.find(r => r[26] === rep3.reportId);
+const month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][Number(today.slice(5, 7)) - 1];
+ok('Bridge_Conso: all teams, one row per report, client columns + KM/Loc/Month', CO.data[0].slice(21, 26).join('|') === 'Target (KM)|Actual (KM)|Target (Loc)|Actual (Loc)|Month' && coRows.length === 2
+  && co2[5] === 'Segment 10 Scupper Drain' && co2[8] === '1' && co2[23] === '' && co2[25] === month && co3[23] === '3' && co3[24] === '2' && co3[8] === '', JSON.stringify([co2, co3].map(r => r.slice(5, 26))));
+const MS = B.sheets['Monthly Summary(Raw)'], msRows = MS.data.slice(1).filter(r => r && r[0]);
+ok('Monthly Summary(Raw): one row per report + Grand Total with SUM formulas', msRows.length === 3 && msRows[0][2] === 'BRIDGE EPOXY 1' && msRows[0][11] === '3' && msRows[1][2] === 'SEGMENT 10 SCUPPER DRAIN' && msRows[1][3] === '1'
+  && msRows[2][0] === 'Grand Total' && msRows[2][7] === '=SUM(H2:H3)', JSON.stringify(msRows));
+const SU = B.sheets['Summary per Activity'];
+ok('Summary per Activity: activities with live SUMIFS over Bridge_Conso, month filter in B1, Grand Total', SU.data[0][1] === 'All' && SU.data[2][1] === ' Target (Loc)' && SU.data[3][0] === 'BRIDGE EPOXY 1'
+  && /^=SUMIFS\('Bridge_Conso'!\$X:\$X,'Bridge_Conso'!\$F:\$F,\$A4,'Bridge_Conso'!\$Z:\$Z,IF\(\$B\$1="All","\*",\$B\$1\)\)$/.test(SU.data[3][1]) && SU.data.find(r => r && r[0] === 'Grand Total')[1] === '=SUM(B4:B7)', JSON.stringify(SU.data.slice(0, 5)));
 const trBefore = JSON.stringify(trRows), atBefore = JSON.stringify(AT.data);
 B.env.rebuildClientTabs();
 ok('rebuildClientTabs() regenerates the same tabs', JSON.stringify(B.sheets['Segment 10 Scupper Drain'].data.slice(1).filter(r => r && r[21])) === trBefore && JSON.stringify(B.sheets['Attendance Segment 10'].data) === atBefore);

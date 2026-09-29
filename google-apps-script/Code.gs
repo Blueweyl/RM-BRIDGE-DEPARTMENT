@@ -190,8 +190,12 @@ function setup(options) {
   accSheet_();
   // Crew names as written in the client's reports (LAST, FIRST M.), filled once; editable in the Roster tab.
   readAll_('Roster').forEach(function (m) { if (!m.reportName && REPORT_NAMES[m.personId]) upsert_('Roster', m.personId, { reportName: REPORT_NAMES[m.personId] }); });
-  Object.keys(TEAM_REPORT_TABS).forEach(function (t) { if (row_('Teams', t)) teamReportSheet_(t); });
-  ATTENDANCE_TABS.forEach(function (cfg) { if (row_('Teams', cfg.teamId)) attendanceTabWrite_(cfg); });
+  // Client report tabs (created if missing; their rows are rewritten from the data, never typed in).
+  TEAM_TABS.forEach(function (t) { teamReportSheet_(t); });
+  consoSheet_();
+  monthlyWrite_();
+  summaryWrite_();
+  ATTENDANCE_TABS.forEach(function (cfg) { attendanceTabWrite_(cfg); });
   audit_({ name: 'setup', role: 'system' }, '', 'setup', 'system', '', null, null, 'setup() run');
   Logger.log('Setup complete. Write the PINs above down now — the Users tab only keeps a hash.');
   Logger.log('Next: Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone), then run showSetupLink.');
@@ -248,15 +252,19 @@ function clearAuditFailures() { PropertiesService.getScriptProperties().deletePr
 function rebuildClientTabs() {
   CACHE = {};
   var n = 0;
-  Object.keys(TEAM_REPORT_TABS).forEach(function (teamId) {
-    var sh = teamReportSheet_(teamId), last = sh.getLastRow();
-    if (last > 1) sh.getRange(2, 1, last - 1, TR_COLS).clearContent();
-    readAll_('DailyReports').filter(function (r) { return r.teamId === teamId && (r.state === 'submitted' || Number(r.version) > 0); })
-      .sort(function (a, b) { return a.reportDate.localeCompare(b.reportDate); })
-      .forEach(function (r) { teamReportWrite_(r); n++; });
+  var clear = function (sh, ncols) { var last = sh.getLastRow(); if (last > 1) sh.getRange(2, 1, last - 1, ncols).clearContent(); };
+  TEAM_TABS.forEach(function (t) { clear(teamReportSheet_(t), TR_COLS); });
+  clear(consoSheet_(), CONSO_COLS);
+  submittedReports_().sort(function (a, b) { return (a.reportDate + (a.firstSubmittedAt || '')).localeCompare(b.reportDate + (b.firstSubmittedAt || '')); }).forEach(function (r) {
+    var t = teamTab_(r.teamId);
+    if (t) sheetRowWrite_(teamReportSheet_(t), TR_COLS, r.reportId, reportRow_(r, t));
+    sheetRowWrite_(consoSheet_(), CONSO_COLS, r.reportId, consoRow_(r));
+    n++;
   });
+  monthlyWrite_();
+  summaryWrite_();
   ATTENDANCE_TABS.forEach(function (cfg) { attendanceTabWrite_(cfg); });
-  Logger.log('Client tabs rebuilt: ' + n + ' report rows, ' + ATTENDANCE_TABS.length + ' attendance tabs.');
+  Logger.log('Client tabs rebuilt: ' + n + ' reports.');
   return n;
 }
 
@@ -1042,18 +1050,31 @@ function accUpdate_(s, rep) {
 // Both are rewritten automatically from the app's data; nobody types into them.
 // ════════════════════════════════════════════════════════════════════════════
 
-var TEAM_REPORT_TABS = {
-  team1: { tab: 'Bridge RM_Team 1', km: ['Target (KM)', 'Actual (KM)'] },
-  team2: { tab: 'Segment 10 Scupper Drain', km: ['Target (KM)\nStation', 'Actual (KM)\nStation'] },
-};
-var ATTENDANCE_TABS = [
-  { tab: 'Attendance Bridge RM', teamId: 'team1', label: 'Bridge RM', equipTitle: 'BRIDGE RM EQUIPMENT', equipment: ['Grass Cutter', 'Pressure washer'], vehicleTitle: 'BRIDGE RM VEHICLE' },
-  { tab: 'Attendance Segment 10', teamId: 'team2', label: 'Segment 10', equipTitle: 'BRIDGE SEG 10 EQUIPMENT', equipment: ['Grass Cutter', 'Pressure washer'], vehicleTitle: 'BRIDGE SEG 10 VEHICLE' },
+// Per-team activity tabs. `acc` = the accomplishment columns' headings; `kind` says where the
+// accomplishment goes in Bridge_Conso: 'station' → Target/Actual (KM) Station (I/J), 'km' → V/W, 'loc' → X/Y.
+var TEAM_TABS = [
+  { tab: 'Bridge RM_Team 1', teams: ['team1'], acc: ['Target (KM)', 'Actual (KM)'], kind: 'km' },
+  { tab: 'Segment 10 Scupper Drain', teams: ['team2'], acc: ['Target (KM)\nStation', 'Actual (KM)\nStation'], kind: 'station' },
+  { tab: 'Bridge Epoxy', teams: ['team3', 'team4'], acc: ['Target (Loc)', 'Actual (Loc)'], kind: 'loc', upperLeadman: true },
 ];
+var ATTENDANCE_TABS = [
+  { tab: 'Attendance Bridge RM', teams: ['team1'], label: 'Bridge RM', equipTitle: 'BRIDGE RM EQUIPMENT', vehicleTitle: 'BRIDGE RM VEHICLE',
+    equipment: [['Grass Cutter', '', 1], ['Pressure washer', '', 1]], vehicles: [['NFJ 6654', 'team1']] },
+  { tab: 'Attendance Segment 10', teams: ['team2'], label: 'Segment 10', equipTitle: 'BRIDGE SEG 10 EQUIPMENT', vehicleTitle: 'BRIDGE SEG 10 VEHICLE',
+    equipment: [['Grass Cutter', '', 1], ['Pressure washer', '', 1]], vehicles: [['NKU 8624', 'team2']] },
+  { tab: 'Attendance Epoxy 1-2', teams: ['team3', 'team4'], label: 'Bridge Epoxy 1', equipTitle: 'BRIDGE EPOXY 1-2 EQUIPMENT', vehicleTitle: 'BRIDGE EPOXY 1-2 SERVICE VEHICLE',
+    // [name, code, value on a work day] — the app does not track equipment yet, so these are the usual values.
+    equipment: [['Genset Optimax 5kva', 'RM-GS-1', 1], ['Wagner Epoxy injection pump', 'RM-IJM-01', 0], ['Bosch Grinder GWS060', 'RM-G-01', 1],
+      ['Bosch Blower', 'RM-HBM-01', 0], ['Bosch Rotary drill GBH2-24 RE', 'RM-RD-01', 0]],
+    vehicles: [['EPOXY 1 - NCG 5500', 'team3'], ['EPOXY 2 - NEO 5124', 'team4']] },
+];
+var CONSO_TAB = 'Bridge_Conso', MONTHLY_TAB = 'Monthly Summary(Raw)', SUMMARY_TAB = 'Summary per Activity';
 var ATT_TITLE = 'BRIDGE CONNECTOR NLEX - ACCOMPLISHMENT REPORT';
-var ATT_SLOTS = { Skilled: 2, Crew: 6 };            // contract: 1 driver/leadman + 2 skilled + 6 non-skilled = 9
+var ATT_SLOTS = { Skilled: 2, Crew: 6 };            // per team: 1 driver/leadman + 2 skilled + 6 non-skilled = 9
 var TR_COLS = 22;                                   // 21 client columns + hidden Report ID
+var CONSO_COLS = 27;                                // 26 client columns + hidden Report ID
 var WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 // Full names as they appear in the client's attendance sheets.
 var REPORT_NAMES = {
@@ -1063,6 +1084,12 @@ var REPORT_NAMES = {
   'team2-glenn-butiong': 'BUTIONG, GLENN A.', 'team2-glen-jorick-de-mesa': 'DE MESA, GLEN JORICK M.', 'team2-justine-gregg-baylon': 'BAYLON, JUSTINE GREGG F.',
   'team2-john-christian-bernardo': 'BERNARDO, JOHN CHRISTIAN R.', 'team2-ian-enriquez': 'ENRIQUEZ, IAN T.', 'team2-joanner-royce-quilao': 'QUILAO, JOANNER ROYCE R.',
   'team2-rolando-faustino': 'FAUSTINO, ROLANDO G.', 'team2-richard-santiago': 'SANTIAGO, RICHARD A.', 'team2-abraham-balmeo': 'BALMEO, ABRAHAM P.',
+  'team3-allan-miranda': 'MIRANDA, ALLAN P.', 'team3-elmer-dordulo': 'DORDULO, ELMER M.', 'team3-edwin-lozano': 'LOZANO, EDWIN S.',
+  'team3-r-jay-john-aquino': 'AQUINO, R-JAY JOHN C.', 'team3-mark-joseph-de-guzman': 'DE GUZMAN, MARK JOSEPH F.', 'team3-edbryan-dela-cruz': 'DELA CRUZ, EDBRYAN P.',
+  'team3-mark-ian-dungca': 'DUNGCA, MARK IAN T.', 'team3-johnry-manese': 'MANESE, JOHNRY C.', 'team3-eroll-pangilinan': 'PANGILINAN, EROLL M.',
+  'team4-gilbert-rivera': 'RIVERA, GILBERT O.', 'team4-alvin-galang': 'GALANG, ALVIN G.', 'team4-ivan-cabunag': 'CABUNAG, IVAN P.',
+  'team4-aj-enriquez': 'ENRIQUEZ, AJ D.', 'team4-jaypee-occidental': 'OCCIDENTAL, JAYPEE T.', 'team4-edgar-ortillo': 'ORTILLO, EDGAR A.',
+  'team4-voltaire-rotamula': 'ROTAMULA, VOLTAIRE O.', 'team4-joshua-andrei-tayco': 'TAYCO, JOSHUA ANDREI A.',
 };
 
 /** "Justin Billones" → "BILLONES, JUSTIN" (used until the Roster's Report Name is filled in). */
@@ -1076,109 +1103,208 @@ function reportName_(m) {
 }
 
 function weekday_(iso) { var p = iso.split('-').map(Number); return WEEKDAYS[new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()]; }
+function monthName_(iso) { return MONTHS[Number(iso.slice(5, 7)) - 1]; }
+function teamTab_(teamId) { for (var i = 0; i < TEAM_TABS.length; i++) if (TEAM_TABS[i].teams.indexOf(teamId) >= 0) return TEAM_TABS[i]; return null; }
+/** Where a team's accomplishment goes: 'station', 'km' or 'loc' (teams not configured: from their unit). */
+function accKind_(teamId) { var t = teamTab_(teamId); if (t) return t.kind; var tm = row_('Teams', teamId); return tm && tm.defaultUnit === 'KM' ? 'km' : 'loc'; }
 
-/** Run after a report or attendance is saved. A failure never undoes the save, but is recorded. */
+/** Run after a report, attendance or the crew is saved. A failure never undoes the save, but is recorded. */
 function clientTabs_(s, teamId, rep) {
   try {
-    if (rep && TEAM_REPORT_TABS[teamId]) teamReportWrite_(rep);
-    ATTENDANCE_TABS.forEach(function (cfg) { if (cfg.teamId === teamId) attendanceTabWrite_(cfg); });
+    if (rep) {
+      var t = teamTab_(teamId);
+      if (t) sheetRowWrite_(teamReportSheet_(t), TR_COLS, rep.reportId, reportRow_(rep, t));
+      sheetRowWrite_(consoSheet_(), CONSO_COLS, rep.reportId, consoRow_(rep));
+      monthlyWrite_();
+    }
+    ATTENDANCE_TABS.forEach(function (cfg) { if (cfg.teams.indexOf(teamId) >= 0) attendanceTabWrite_(cfg); });
   } catch (e) {
     Logger.log('client tab update failed: ' + e);
     audit_(s.user, teamId, 'client report tab update failed', 'report', rep ? rep.reportId : '', null, null, String(e && e.message || e).slice(0, 300), rep ? rep.rev : '');
   }
 }
 
-function teamReportSheet_(teamId) {
-  var cfg = TEAM_REPORT_TABS[teamId], ss = db_(), sh = ss.getSheetByName(cfg.tab);
+var TR_HEAD = ['Days', 'Date', 'From', 'To', 'Location ', 'Activity', 'Activity Details', 'Status', '', '', 'Before', 'After', 'Target (EQP)', 'Actual (EQP',
+  'Plate Number', 'Target (Manpower)', 'Actual (Manpower)', 'Team', 'Target (Leadman)', 'Actual (Leadman)', 'Leadman/Driver'];
+var TR_FMT = ['@', 'dd-mmm-yy', 'h:mm AM/PM', 'h:mm AM/PM', '@', '@', '@', '@', 'General', 'General', 'General', 'General', 'General', 'General', '@', 'General', 'General', '@', 'General', 'General', '@'];
+var TR_WIDTHS = [15, 22, 10, 9, 32, 20, 34, 15, 18, 18, 34, 35, 19, 18, 21, 28, 34, 35, 25, 23, 24];
+
+function headSheet_(name, head, widths, hideCol) {
+  var ss = db_(), sh = ss.getSheetByName(name);
   if (sh && sh.getLastRow() >= 1) return sh;
-  if (!sh) sh = ss.insertSheet(cfg.tab);
-  var head = ['Days', 'Date', 'From', 'To', 'Location ', 'Activity', 'Activity Details', 'Status', cfg.km[0], cfg.km[1], 'Before', 'After', 'Target (EQP)', 'Actual (EQP',
-    'Plate Number', 'Target (Manpower)', 'Actual (Manpower)', 'Team', 'Target (Leadman)', 'Actual (Leadman)', 'Leadman/Driver', 'Report ID'];
-  sh.getRange(1, 1, 1, TR_COLS).setValues([head]).setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+  if (!sh) sh = ss.insertSheet(name);
+  sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
   sh.setFrozenRows(1);
-  [15, 22, 10, 9, 32, 20, 34, 15, 18, 18, 34, 35, 19, 18, 21, 28, 34, 35, 25, 23, 24].forEach(function (w, i) { sh.setColumnWidth(i + 1, Math.round(w * 7)); });
-  sh.hideColumns(22);
+  (widths || []).forEach(function (w, i) { sh.setColumnWidth(i + 1, Math.round(w * 7)); });
+  if (hideCol) sh.hideColumns(hideCol);
   return sh;
 }
+function teamReportSheet_(t) {
+  var head = TR_HEAD.slice(); head[8] = t.acc[0]; head[9] = t.acc[1];
+  return headSheet_(t.tab, head.concat(['Report ID']), TR_WIDTHS, TR_COLS);
+}
+function consoSheet_() {
+  var head = TR_HEAD.slice(); head[8] = 'Target (KM)\nStation'; head[9] = 'Actual (KM)\nStation';
+  return headSheet_(CONSO_TAB, head.concat(['Target (KM)', 'Actual (KM)', 'Target (Loc)', 'Actual (Loc)', 'Month', 'Report ID']), TR_WIDTHS.concat([14, 14, 14, 14, 12]), CONSO_COLS);
+}
 
-/** Write (or rewrite) one report's row in its team's activity tab. */
-function teamReportWrite_(r) {
-  var sh = teamReportSheet_(r.teamId), last = sh.getLastRow(), row = 0;
+/** The shared facts of one report, as the client's sheets show them. */
+function reportFacts_(r) {
+  var photos = {}, byId = {};
+  readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
+  readAll_('Roster').forEach(function (m) { byId[m.personId] = m; });
+  var att = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate; });
+  var lead = att.filter(function (a) { return a.role === 'Leadman'; })[0];
+  var leadIn = lead ? (lead.status === 'Present' ? '1' : '0') : '';
+  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
+  var t = teamTab_(r.teamId);
+  return {
+    crew: att.filter(function (a) { return a.status === 'Present' && a.role !== 'Leadman'; }).map(function (a) { return safeCell_(reportName_(byId[a.personId] || { name: a.name })); }).join('\n'),
+    leadIn: leadIn, eqpIn: leadIn,           // the vehicle goes out with its driver/leadman
+    before: img(r.beforePhotoId), after: img(r.afterPhotoId),
+    leadman: safeCell_(t && t.upperLeadman ? String(r.leadman || '').toUpperCase() : r.leadman),
+    status: String(r.status || '').toUpperCase(),
+  };
+}
+function reportRow_(r, t) {
+  var f = reportFacts_(r);
+  return [weekday_(r.reportDate), r.reportDate, r.fromTime, r.toTime, safeCell_(r.location), safeCell_(r.team), safeCell_(r.activityDetails), f.status,
+    r.target, r.actual, f.before, f.after, '1', f.eqpIn, safeCell_(r.plateNumber), r.targetManpower, r.actualManpower, f.crew, '1', f.leadIn, f.leadman, r.reportId];
+}
+function consoRow_(r) {
+  var row = reportRow_(r, teamTab_(r.teamId) || { acc: [] }), kind = accKind_(r.teamId);
+  var st = kind === 'station', km = kind === 'km', loc = kind === 'loc';
+  row[8] = st ? r.target : ''; row[9] = st ? r.actual : '';
+  row.pop();                                                         // report ID goes last, after the extra columns
+  return row.concat([km ? r.target : '', km ? r.actual : '', loc ? r.target : '', loc ? r.actual : '', monthName_(r.reportDate), r.reportId]);
+}
+
+/** Write (or rewrite) the row keyed by report ID (in the last, hidden column). */
+function sheetRowWrite_(sh, ncols, reportId, values) {
+  var last = sh.getLastRow(), row = 0;
   if (last >= 2) {
-    var ids = sh.getRange(2, TR_COLS, last - 1, 1).getDisplayValues();
-    for (var i = 0; i < ids.length; i++) if (ids[i][0] === r.reportId) { row = 2 + i; break; }
+    var ids = sh.getRange(2, ncols, last - 1, 1).getDisplayValues();
+    for (var i = 0; i < ids.length; i++) if (ids[i][0] === reportId) { row = 2 + i; break; }
   }
   if (!row) row = Math.max(last + 1, 2);
   if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 200);
-  var photos = {};
-  readAll_('Photos').forEach(function (p) { photos[p.photoId] = p; });
-  var img = function (id) { var p = photos[id]; return p ? '=IMAGE("' + p.thumbnailUrl + '")' : ''; };
-  var byId = {};
-  readAll_('Roster').forEach(function (m) { byId[m.personId] = m; });
-  var att = readAll_('Attendance').filter(function (a) { return a.teamId === r.teamId && a.reportDate === r.reportDate; });
-  var crew = att.filter(function (a) { return a.status === 'Present' && a.role !== 'Leadman'; }).map(function (a) { return safeCell_(reportName_(byId[a.personId] || { name: a.name })); });
-  var lead = att.filter(function (a) { return a.role === 'Leadman'; })[0];
-  var v = [weekday_(r.reportDate), r.reportDate, r.fromTime, r.toTime, safeCell_(r.location), safeCell_(r.team), safeCell_(r.activityDetails), String(r.status || '').toUpperCase(),
-    r.target, r.actual, img(r.beforePhotoId), img(r.afterPhotoId), '1', r.plateNumber ? '1' : '0', safeCell_(r.plateNumber),
-    r.targetManpower, r.actualManpower, crew.join('\n'), '1', lead ? (lead.status === 'Present' ? '1' : '0') : '', safeCell_(r.leadman), r.reportId];
-  var fmt = ['@', 'dd-mmm-yy', 'h:mm AM/PM', 'h:mm AM/PM', '@', '@', '@', '@', 'General', 'General', 'General', 'General', 'General', 'General', '@', 'General', 'General', '@', 'General', 'General', '@', '@'];
-  var range = sh.getRange(row, 1, 1, TR_COLS);
+  var fmt = TR_FMT.concat(['General', 'General', 'General', 'General', '@', '@', '@']).slice(0, ncols);
+  fmt[ncols - 1] = '@';
+  var range = sh.getRange(row, 1, 1, ncols);
   range.setNumberFormats([fmt]);
-  range.setValues([v]);
+  range.setValues([values]);
   range.setVerticalAlignment('middle').setWrap(true);
   sh.setRowHeight(row, 160);
   return row;
 }
 
-/** Rewrite a team's attendance grid (people × days) from the Attendance tab. */
+function submittedReports_() {
+  return readAll_('DailyReports').filter(function (r) { return r.state === 'submitted' || Number(r.version) > 0; });
+}
+
+/** Monthly Summary(Raw): one row per report, grouped by activity, with a Grand Total row. Rewritten each time. */
+function monthlyWrite_() {
+  var head = ['Date', 'Month', 'Activity', 'Target (Accomplishment)', 'Actual (Accomplishment)', ' Target (EQP)', 'Actual (EQP)', 'Manpower (Target)', 'Manpower (Actual)',
+    ' Target (Leadman)', ' Actual (Leadman)', ' Target (Loc)', ' Actual (Loc)'];
+  var sh = headSheet_(MONTHLY_TAB, head, [12, 10, 26, 16, 16, 12, 12, 14, 14, 14, 14, 12, 12]);
+  var rows = submittedReports_().sort(function (a, b) { return (a.team + a.reportDate).localeCompare(b.team + b.reportDate); }).map(function (r) {
+    var f = reportFacts_(r), loc = accKind_(r.teamId) === 'loc';
+    return [r.reportDate, monthName_(r.reportDate), safeCell_(String(r.team || '').toUpperCase()), loc ? '' : r.target, loc ? '' : r.actual, '1', f.eqpIn,
+      r.targetManpower, r.actualManpower, '1', f.leadIn, loc ? r.target : '', loc ? r.actual : ''];
+  });
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, head.length).clearContent();
+  var n = rows.length, total = ['Grand Total', '', ''];
+  for (var c = 4; c <= head.length; c++) { var L = columnLetter_(c); total.push(n ? '=SUM(' + L + '2:' + L + (n + 1) + ')' : '0'); }
+  rows.push(total);
+  if (rows.length + 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), rows.length + 1 - sh.getMaxRows());
+  var fmt = rows.map(function () { return ['yyyy-mm-dd', '@', '@', 'General', 'General', 'General', 'General', 'General', 'General', 'General', 'General', 'General', 'General']; });
+  sh.getRange(2, 1, rows.length, head.length).setNumberFormats(fmt).setValues(rows);
+  sh.getRange(rows.length + 1, 1, 1, head.length).setFontWeight('bold');
+}
+
+/**
+ * Summary per Activity: the client's pivot (sums per activity), as live formulas over Bridge_Conso.
+ * Type a month name (e.g. September) in B1 to filter, or All.
+ */
+function summaryWrite_() {
+  var ss = db_(), sh = ss.getSheetByName(SUMMARY_TAB) || ss.insertSheet(SUMMARY_TAB);
+  var keepMonth = sh.getLastRow() >= 1 ? String(sh.getRange(1, 2).getDisplayValues()[0][0] || '') : '';
+  var acts = readAll_('Teams').filter(function (t) { return t.active !== 'No'; }).map(function (t) { return String(t.name); }).sort(function (a, b) { return a.toUpperCase().localeCompare(b.toUpperCase()); });
+  // [heading, Bridge_Conso column]
+  var cols = [[' Target (Loc)', 'X'], [' Actual (Loc)', 'Y'], [' Target (KM)', 'V'], [' Actual (KM)', 'W'], [' Target (EQP)', 'M'], [' Actual (EQP', 'N'],
+    [' Target (Manpower)', 'P'], [' Actual (Manpower)', 'Q'], [' Target (Leadman)', 'S'], [' Actual (Leadman)', 'T']];
+  var grid = [['Date', keepMonth || 'All', 'Type a month name (e.g. September) or All'].concat(cols.slice(2).map(function () { return ''; })), cols.map(function () { return ''; }).concat(['']), ['Activity'].concat(cols.map(function (c) { return c[0]; }))];
+  var crit = 'IF($B$1="All","*",$B$1)';
+  acts.forEach(function (a, i) {
+    var r = 4 + i;
+    grid.push([safeCell_(a.toUpperCase().indexOf('EPOXY') >= 0 ? a.toUpperCase() : a)].concat(cols.map(function (c) {
+      return '=SUMIFS(\'' + CONSO_TAB + '\'!$' + c[1] + ':$' + c[1] + ',\'' + CONSO_TAB + '\'!$F:$F,$A' + r + ',\'' + CONSO_TAB + '\'!$Z:$Z,' + crit + ')';
+    })));
+  });
+  var end = 3 + acts.length;
+  grid.push(['Grand Total'].concat(cols.map(function (c, j) { var L = columnLetter_(j + 2); return '=SUM(' + L + '4:' + L + end + ')'; })));
+  sh.clearContents();
+  if (sh.getMaxRows() < grid.length) sh.insertRowsAfter(sh.getMaxRows(), grid.length - sh.getMaxRows());
+  sh.getRange(1, 1, grid.length, cols.length + 1).setValues(grid);
+  sh.getRange(3, 1, 1, cols.length + 1).setFontWeight('bold');
+  sh.getRange(grid.length, 1, 1, cols.length + 1).setFontWeight('bold');
+  sh.setColumnWidth(1, 200);
+}
+
+function columnLetter_(n) { var s = ''; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+
+/** Rewrite an attendance grid (people × days, one block per team) from the Attendance tab. */
 function attendanceTabWrite_(cfg) {
   var ss = db_(), sh = ss.getSheetByName(cfg.tab) || ss.insertSheet(cfg.tab);
-  var roster = readAll_('Roster').filter(function (m) { return m.teamId === cfg.teamId; });
-  var marks = {}, dates = {};
+  var marks = {}, dates = {}, teamDates = {};
   readAll_('Attendance').forEach(function (a) {
-    if (a.teamId !== cfg.teamId) return;
+    if (cfg.teams.indexOf(a.teamId) < 0) return;
     marks[a.personId + '|' + a.reportDate] = a.status === 'Present' ? 1 : 0;
-    dates[a.reportDate] = true;
+    dates[a.reportDate] = true; teamDates[a.teamId + '|' + a.reportDate] = true;
   });
   // Columns: from the 1st of the first month with attendance to the end of the current month.
   var first = Object.keys(dates).sort()[0] || today_(), start = first.slice(0, 8) + '01';
-  var t = today_(), end = shiftDate_(shiftDate_(t.slice(0, 8) + '01', 32).slice(0, 8) + '01', -1), days = [];
+  var end = shiftDate_(shiftDate_(today_().slice(0, 8) + '01', 32).slice(0, 8) + '01', -1), days = [];
   for (var d = start; d <= end; d = shiftDate_(d, 1)) days.push(d);
-  // Rows: leadman, then skilled and crew slots (at least 2 and 6), including anyone archived who worked in the period.
-  var worked = function (m) { return m.status === 'Active' || days.some(function (dd) { return marks[m.personId + '|' + dd] !== undefined; }); };
-  var group = function (role) { return roster.filter(function (m) { return m.role === role && worked(m); }); };
-  var slots = [].concat(group('Leadman').map(function (m) { return ['Driver/Leadman', m]; }));
-  if (!slots.length) slots.push(['Driver/Leadman', null]);
-  ['Skilled', 'Crew'].forEach(function (role) {
-    var g = group(role);
-    for (var i = 0; i < Math.max(ATT_SLOTS[role], g.length); i++) slots.push([role, g[i] || null]);
-  });
-  var width = 3 + days.length, blank = function () { var r = []; for (var i = 0; i < width; i++) r.push(''); return r; };
+  var width = 3 + days.length;
+  var blank = function () { var r = []; for (var i = 0; i < width; i++) r.push(''); return r; };
   var line = function (a, b, c, vals) { return [a, b, c].concat(vals); };
   var grid = [blank(), line(ATT_TITLE, '', '', days), line('No.', cfg.label, 'NAME', days.map(weekday_))];
   var val = function (m, dd) { var x = m ? marks[m.personId + '|' + dd] : undefined; return x === undefined ? '' : x; };
-  var sums = { lead: [], skilled: [], crew: [] };
-  slots.forEach(function (sl, i) {
-    grid.push(line(String(i + 1), sl[0], sl[1] ? safeCell_(reportName_(sl[1])) : '', days.map(function (dd) { return val(sl[1], dd); })));
-  });
   var workDay = function (dd) { return !!dates[dd]; };
-  var total = function (role) { return days.map(function (dd) { if (!workDay(dd)) return ''; var n = 0; slots.forEach(function (sl) { if (sl[0] === role && sl[1]) n += Number(val(sl[1], dd) || 0); }); return n; }); };
+  var all = [], leadOf = {};
+  // One block per team: leadman, then skilled and crew slots (at least 2 and 6), including anyone archived who worked in the period.
+  cfg.teams.forEach(function (teamId, bi) {
+    var roster = readAll_('Roster').filter(function (m) { return m.teamId === teamId; });
+    var worked = function (m) { return m.status === 'Active' || days.some(function (dd) { return marks[m.personId + '|' + dd] !== undefined; }); };
+    var group = function (role) { return roster.filter(function (m) { return m.role === role && worked(m); }); };
+    var slots = group('Leadman').map(function (m) { return ['Driver/Leadman', m]; });
+    if (!slots.length) slots.push(['Driver/Leadman', null]);
+    leadOf[teamId] = slots[0][1];
+    ['Skilled', 'Crew'].forEach(function (role) { var g = group(role); for (var i = 0; i < Math.max(ATT_SLOTS[role], g.length); i++) slots.push([role, g[i] || null]); });
+    if (bi > 0) grid.push(blank());
+    slots.forEach(function (sl, i) {
+      grid.push(line(String(i + 1), sl[0], sl[1] ? safeCell_(reportName_(sl[1])) : '', days.map(function (dd) { return val(sl[1], dd); })));
+    });
+    all = all.concat(slots);
+  });
+  var total = function (role) { return days.map(function (dd) { if (!workDay(dd)) return ''; var n = 0; all.forEach(function (sl) { if (sl[0] === role && sl[1]) n += Number(val(sl[1], dd) || 0); }); return n; }); };
   grid.push(blank(), blank());
-  grid.push(line('TOTAL MANPOWER REQUIRED', '', '', days.map(function (dd) { return workDay(dd) ? 1 + ATT_SLOTS.Skilled + ATT_SLOTS.Crew : ''; })));
+  grid.push(line('TOTAL MANPOWER REQUIRED', '', '', days.map(function (dd) { return workDay(dd) ? cfg.teams.length * (1 + ATT_SLOTS.Skilled + ATT_SLOTS.Crew) : ''; })));
   grid.push(line('Driver (6 days, day shift, 8 hours shift per pax) ', '', '', total('Driver/Leadman')));
   grid.push(line('Skilled labor (6 days, 8 hours shift per pax) AM shift', '', '', total('Skilled')));
   grid.push(line('Non-Skilled labor (6 days, 8 hours shift per pax) AM shift', '', '', total('Crew')));
   grid.push(blank(), blank());
   grid.push(line(cfg.equipTitle, '', '', days.map(function () { return ''; })));
-  cfg.equipment.forEach(function (eq, i) { grid.push(line(String(i + 1), eq, '', days.map(function (dd) { return workDay(dd) ? 1 : ''; }))); });
+  cfg.equipment.forEach(function (eq, i) { grid.push(line(String(i + 1), eq[0], eq[1], days.map(function (dd) { return workDay(dd) ? eq[2] : ''; }))); });
   grid.push(blank());
   grid.push(line('', cfg.vehicleTitle, '', days.map(function () { return ''; })));
-  var plates = readAll_('DailyReports').filter(function (r) { return r.teamId === cfg.teamId && r.plateNumber; }).sort(function (a, b) { return b.reportDate.localeCompare(a.reportDate); });
-  grid.push(line('1', plates.length ? safeCell_(plates[0].plateNumber) : '', '', total('Driver/Leadman')));
+  cfg.vehicles.forEach(function (v, i) { grid.push(line(String(i + 1), v[0], '', days.map(function (dd) { return val(leadOf[v[1]], dd); }))); });
 
   sh.clearContents();
   if (sh.getMaxRows() < grid.length) sh.insertRowsAfter(sh.getMaxRows(), grid.length - sh.getMaxRows());
-  sh.getRange(1, 1, grid.length, width).setValues(grid.map(function (r) { return r.map(function (x) { return x === '' ? '' : x; }); }));
+  sh.getRange(1, 1, grid.length, width).setValues(grid);
   sh.getRange(2, 4, 1, days.length).setNumberFormat('d-mmm-yy');
   sh.getRange(2, 1, 1, 3).merge();
   sh.getRange(2, 1, 2, width).setFontWeight('bold').setHorizontalAlignment('center');

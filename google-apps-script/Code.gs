@@ -167,7 +167,7 @@ function doGet() {
 }
 
 function doPost(e) {
-  CACHE = {};
+  CACHE = {}; SECRET = null;
   var req;
   try { req = JSON.parse(e.postData.contents); } catch (err) { return out_({ ok: false, error: 'Bad request' }); }
   try {
@@ -175,12 +175,16 @@ function doPost(e) {
     var sess = verify_(req.token);
     var fn = ACTIONS[req.action];
     if (!fn) return out_({ ok: false, error: 'Unknown action' });
+    // Slow work that doesn't touch the Sheet (e.g. saving a photo to Drive) runs before the
+    // lock, so other phones are not kept waiting behind it.
+    var pre = fn.prepare ? fn.prepare(sess, req) : null;
     var lock = null;
     if (fn.writes) {
       lock = LockService.getScriptLock();
       if (!lock.tryLock(25000)) return out_({ ok: false, error: 'Server busy — please try again.' });
+      if (pre) CACHE = {};                          // another writer may have changed the Sheet meanwhile
     }
-    try { return out_(fn.run(sess, req)); }
+    try { return out_(fn.run(sess, req, pre)); }
     finally { if (lock) lock.releaseLock(); }
   } catch (err) {
     var msg = String(err && err.message || err);
@@ -192,7 +196,7 @@ var ACTIONS = {
   me:             { run: function (s) { return { ok: true, user: s.user }; } },
   load:           { run: load_ },
   saveAttendance: { run: saveAttendance_, writes: true },
-  uploadPhoto:    { run: uploadPhoto_, writes: true },
+  uploadPhoto:    { prepare: savePhotoFile_, run: uploadPhoto_, writes: true },
   removePhoto:    { run: removePhoto_, writes: true },
   submitReport:   { run: submitReport_, writes: true },
   reopenReport:   { run: reopenReport_, writes: true },
@@ -251,8 +255,10 @@ function verify_(token) {
   return { user: userFor_(team), team: team };
 }
 
+var SECRET = null;
+
 function sign_(s) {
-  var secret = PropertiesService.getScriptProperties().getProperty('TOKEN_SECRET');
+  var secret = SECRET || (SECRET = PropertiesService.getScriptProperties().getProperty('TOKEN_SECRET'));
   if (!secret) throw new Error('Backend not set up — run setup() in the Apps Script editor.');
   return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(s, secret)).replace(/=+$/, '');
 }
@@ -330,18 +336,20 @@ function saveAttendance_(s, req) {
   var now = now_(), by = s.user.name, changes = [];
   var before = {};
   readAll_('Attendance').forEach(function (a) { if (a.teamId === req.teamId && a.reportDate === req.reportDate) before[a.personId] = a; });
+  var items = [];
   rows.forEach(function (r) {
     var key = req.teamId + '|' + req.reportDate + '|' + r.m.personId, old = before[r.m.personId];
     var status = r.absent ? 'Absent' : 'Present';
     if (old && (old.status !== status || old.absenceReason !== r.reason)) changes.push(r.m.name + ': ' + old.status + (old.absenceReason ? ' (' + old.absenceReason + ')' : '') + ' → ' + status + (r.reason ? ' (' + r.reason + ')' : ''));
-    upsert_('Attendance', key, {
+    items.push({ key: key, data: {
       key: key, reportDate: req.reportDate, teamId: req.teamId, personId: r.m.personId, name: r.m.name, role: r.m.role,
       status: status, absenceReason: r.reason, submittedAt: now, submittedBy: by, updatedAt: now,
-    }, { createdAt: now });
+    }, defaults: { createdAt: now } });
     delete before[r.m.personId];
   });
+  upsertMany_('Attendance', items);          // whole crew in one or two writes, not one per person
   // People no longer on the active roster are dropped from this day's sheet.
-  Object.keys(before).forEach(function (pid) { deleteRow_('Attendance', before[pid].key); });
+  deleteRows_('Attendance', Object.keys(before).map(function (pid) { return before[pid].key; }));
 
   var present = rows.filter(function (r) { return !r.absent; }).length;
   var absentList = rows.filter(function (r) { return r.absent; }).map(function (r) { return r.m.name + ' (' + r.reason + ')'; }).join('; ');
@@ -359,7 +367,11 @@ function saveAttendance_(s, req) {
 // Photos
 // ════════════════════════════════════════════════════════════════════════════
 
-function uploadPhoto_(s, req) {
+/**
+ * Runs before the write lock: checks the request and saves the file to Drive. Drive calls are
+ * the slow part of an upload, so keeping them out of the lock lets other phones save meanwhile.
+ */
+function savePhotoFile_(s, req) {
   needTeam_(s, req.teamId);
   needWritableDate_(s, req.reportDate);
   if (req.type !== 'before' && req.type !== 'after') throw new Error('Photo type must be before or after');
@@ -371,7 +383,7 @@ function uploadPhoto_(s, req) {
   if (bytes.length > MAX_PHOTO_BYTES) throw new Error('Photo is too large.');
 
   var team = row_('Teams', req.teamId), now = now_();
-  var folder = subFolder_(subFolder_(photoRoot_(), req.reportDate), team.short || team.teamId);
+  var folder = photoFolder_(req.reportDate, team.short || team.teamId);
   var ext = m[2].toLowerCase() === 'jpeg' ? 'jpg' : m[2].toLowerCase();
   var name = req.reportDate + '_' + (team.short || team.teamId).replace(/[^A-Za-z0-9]+/g, '') + '_' + req.type.toUpperCase() + '_' + now.slice(11).replace(/:/g, '') + '.' + ext;
   var file = folder.createFile(Utilities.newBlob(bytes, m[1], name));
@@ -379,13 +391,20 @@ function uploadPhoto_(s, req) {
   // Link sharing lets the app and the Sheet show a preview. Workspace domains may block it;
   // the photo is still stored and admins can open it from Drive.
   try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+  return { fileId: file.getId() };
+}
 
+/** Runs under the write lock: records the photo saved by savePhotoFile_ in the Sheet. */
+function uploadPhoto_(s, req, pre) {
+  var rep = row_('Reports', req.teamId + '|' + req.reportDate);
+  if (rep && rep.state === 'submitted' && !isAdmin_(s)) throw new Error('Report already submitted. Tap Edit report first.');
+  var now = now_(), fileId = pre.fileId;
   var replaced = markPhotos_(req.teamId, req.reportDate, req.type, 'Replaced');
   var photoId = 'ph-' + Utilities.getUuid().slice(0, 8);
   var photo = {
     photoId: photoId, teamId: req.teamId, reportDate: req.reportDate, type: req.type, status: 'Active',
-    fileId: file.getId(), fileUrl: 'https://drive.google.com/file/d/' + file.getId() + '/view',
-    thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800',
+    fileId: fileId, fileUrl: 'https://drive.google.com/file/d/' + fileId + '/view',
+    thumbnailUrl: 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w800',
     originalFilename: String(req.originalFilename || '').slice(0, 200), uploadedAt: now, uploadedBy: s.user.name,
   };
   upsert_('Photos', photoId, photo);
@@ -587,6 +606,11 @@ function formatRows_(sh, name, fromRow, count) {
   sh.getRange(fromRow, 1, count, fmts.length).setNumberFormats(grid);
 }
 
+function hasFormulas_(name) {
+  return TABLES[name].some(function (c) { return FORMULA_FIELDS[c[0]]; });
+}
+
+/** All rows of a tab, read once per request and cached. */
 function readAll_(name) {
   if (CACHE[name]) return CACHE[name].rows.map(function (r) { return Object.assign({}, r); });
   var sh = sheet_(name), n = sh.getLastRow() - 1, cols = TABLES[name];
@@ -597,8 +621,20 @@ function readAll_(name) {
   });
   var index = {}, kf = KEY_FIELD[name];
   if (kf) rows.forEach(function (r, i) { index[r[kf]] = i; });
-  CACHE[name] = { rows: rows, index: index };
+  CACHE[name] = { rows: rows, index: index, formulas: null, maxRows: null };
   return rows.map(function (r) { return Object.assign({}, r); });
+}
+
+/** Photo preview formulas of a tab, read once (only when a row is about to be rewritten). */
+function formulas_(name) {
+  var C = CACHE[name], cols = TABLES[name];
+  if (C.formulas) return C.formulas;
+  C.formulas = !C.rows.length ? [] : sheet_(name).getRange(2, 1, C.rows.length, cols.length).getFormulas().map(function (v) {
+    var o = {};
+    cols.forEach(function (c, i) { if (FORMULA_FIELDS[c[0]]) o[c[0]] = v[i] || ''; });
+    return o;
+  });
+  return C.formulas;
 }
 
 function row_(name, key) {
@@ -607,60 +643,95 @@ function row_(name, key) {
   return i == null ? null : Object.assign({}, CACHE[name].rows[i]);
 }
 
+/** Make sure the tab has at least `lastRow` rows, adding them 500 at a time. */
+function ensureRows_(sh, info, lastRow) {
+  if (info.maxRows == null) info.maxRows = sh.getMaxRows();
+  if (lastRow <= info.maxRows) return;
+  var add = Math.ceil((lastRow - info.maxRows) / 500) * 500;
+  sh.insertRowsAfter(info.maxRows, add);
+  info.maxRows += add;
+}
+
 /**
  * Insert or update one row by key. Only fields present in `data` change;
  * `defaults` are used for new rows only. Whole row is written in one call.
  */
 function upsert_(name, key, data, defaults) {
-  var sh = sheet_(name), cols = TABLES[name], kf = KEY_FIELD[name];
-  readAll_(name);
-  var i = CACHE[name].index[key], isNew = i == null;
-  var rowNum = isNew ? CACHE[name].rows.length + 2 : i + 2;
-  var current;
-  if (isNew) {
-    current = {};
-    if (rowNum > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 500);
-    formatRows_(sh, name, rowNum, 1);
-  } else {
-    current = CACHE[name].rows[i];
-    var formulas = sh.getRange(rowNum, 1, 1, cols.length).getFormulas()[0];
-    cols.forEach(function (c, j) { if (FORMULA_FIELDS[c[0]]) current[c[0]] = formulas[j] || ''; });
-  }
-  var merged = {};
-  cols.forEach(function (c) {
-    var k = c[0];
-    if (k === kf) merged[k] = key;
-    else if (data && Object.prototype.hasOwnProperty.call(data, k) && data[k] !== undefined) merged[k] = data[k];
-    else if (isNew && defaults && Object.prototype.hasOwnProperty.call(defaults, k)) merged[k] = defaults[k];
-    else merged[k] = current[k] == null ? '' : current[k];
-  });
-  var values = cols.map(function (c) {
-    var v = merged[c[0]] == null ? '' : String(merged[c[0]]);
-    if (FORMULA_FIELDS[c[0]]) return v;
-    return /^[=+@]/.test(v) ? "'" + v : v;          // typed text is never run as a formula
-  });
-  sh.getRange(rowNum, 1, 1, cols.length).setValues([values]);
-  if (name === 'Reports') sh.setRowHeight(rowNum, 72);
-  var stored = {};
-  cols.forEach(function (c) { stored[c[0]] = FORMULA_FIELDS[c[0]] ? '' : String(merged[c[0]] == null ? '' : merged[c[0]]); });
-  if (isNew) { CACHE[name].index[key] = CACHE[name].rows.length; CACHE[name].rows.push(stored); }
-  else CACHE[name].rows[i] = stored;
-  return rowNum;
+  return upsertMany_(name, [{ key: key, data: data, defaults: defaults }])[0];
 }
 
-function deleteRow_(name, key) {
+/**
+ * Insert or update several rows by key (same rules as upsert_). Rows that sit next to each
+ * other are written with one call, and nothing is read back, so a whole crew's attendance
+ * costs a couple of Sheet calls instead of several per person. Returns the row numbers.
+ */
+function upsertMany_(name, items) {
+  if (!items.length) return [];
+  var sh = sheet_(name), cols = TABLES[name], kf = KEY_FIELD[name];
   readAll_(name);
-  var i = CACHE[name].index[key];
-  if (i == null) return;
-  sheet_(name).deleteRow(i + 2);
+  var C = CACHE[name], byRow = {}, rowNums = [];
+  var F = hasFormulas_(name) && items.some(function (it) { return C.index[it.key] != null; }) ? formulas_(name) : null;
+  items.forEach(function (it) {
+    var i = C.index[it.key], isNew = i == null;
+    var current = isNew ? {} : Object.assign({}, C.rows[i], F ? F[i] : {});
+    var merged = {};
+    cols.forEach(function (c) {
+      var k = c[0];
+      if (k === kf) merged[k] = it.key;
+      else if (it.data && Object.prototype.hasOwnProperty.call(it.data, k) && it.data[k] !== undefined) merged[k] = it.data[k];
+      else if (isNew && it.defaults && Object.prototype.hasOwnProperty.call(it.defaults, k)) merged[k] = it.defaults[k];
+      else merged[k] = current[k] == null ? '' : current[k];
+    });
+    var values = cols.map(function (c) {
+      var v = merged[c[0]] == null ? '' : String(merged[c[0]]);
+      if (FORMULA_FIELDS[c[0]]) return v;
+      return /^[=+@]/.test(v) ? "'" + v : v;          // typed text is never run as a formula
+    });
+    var stored = {}, f = {};
+    cols.forEach(function (c) {
+      var v = String(merged[c[0]] == null ? '' : merged[c[0]]);
+      if (FORMULA_FIELDS[c[0]]) { stored[c[0]] = ''; f[c[0]] = v; } else stored[c[0]] = v;
+    });
+    if (isNew) { i = C.rows.length; C.index[it.key] = i; C.rows.push(stored); if (C.formulas) C.formulas[i] = f; }
+    else { C.rows[i] = stored; if (C.formulas) C.formulas[i] = f; }
+    var prev = byRow[i + 2];
+    byRow[i + 2] = { row: i + 2, values: values, isNew: isNew || !!(prev && prev.isNew) };
+    rowNums.push(i + 2);
+  });
+
+  var writes = Object.keys(byRow).map(function (r) { return byRow[r]; }).sort(function (x, y) { return x.row - y.row; });
+  if (writes.some(function (w) { return w.isNew; })) ensureRows_(sh, C, writes[writes.length - 1].row);
+  // Group rows that sit next to each other into one write.
+  var runs = [];
+  writes.forEach(function (w) {
+    var run = runs[runs.length - 1];
+    if (run && run.start + run.values.length === w.row) { run.values.push(w.values); run.isNew = run.isNew || w.isNew; }
+    else runs.push({ start: w.row, values: [w.values], isNew: w.isNew });
+  });
+  runs.forEach(function (run) {
+    if (run.isNew) formatRows_(sh, name, run.start, run.values.length);
+    sh.getRange(run.start, 1, run.values.length, cols.length).setValues(run.values);
+    if (name === 'Reports') sh.setRowHeights(run.start, run.values.length, 72);
+  });
+  return rowNums;
+}
+
+/** Delete rows by key, bottom row first so the other row numbers stay right. */
+function deleteRows_(name, keys) {
+  readAll_(name);
+  var idx = keys.map(function (k) { return CACHE[name].index[k]; }).filter(function (i) { return i != null; });
+  if (!idx.length) return;
+  var sh = sheet_(name);
+  idx.sort(function (x, y) { return y - x; }).forEach(function (i) { sh.deleteRow(i + 2); });
   delete CACHE[name];
 }
 
 function audit_(user, teamId, date, action, changes) {
   try {
     var sh = sheet_('Audit');
-    var row = sh.getLastRow() + 1;
-    if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 500);
+    var info = CACHE.Audit$ || (CACHE.Audit$ = { next: sh.getLastRow() + 1, maxRows: null });
+    var row = info.next++;
+    ensureRows_(sh, info, row);
     formatRows_(sh, 'Audit', row, 1);
     sh.getRange(row, 1, 1, 7).setValues([[now_(), user.name, user.role, teamId || '', date || '', action, String(changes || '').slice(0, 1000)]
       .map(function (v) { v = String(v); return /^[=+@]/.test(v) ? "'" + v : v; })]);
@@ -687,4 +758,24 @@ function photoRoot_() {
 function subFolder_(parent, name) {
   var it = parent.getFoldersByName(name);
   return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+/**
+ * Drive folder for one team's photos on one day. The folder ID is remembered for a few hours,
+ * so most uploads skip the folder searches. Finding or creating the folder takes the lock
+ * briefly, so two photos sent at the same moment never create the same folder twice.
+ */
+function photoFolder_(date, teamName) {
+  var cache = CacheService.getScriptCache(), key = 'folder:' + date + '/' + teamName;
+  var id = cache.get(key);
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) throw new Error('Server busy — please try again.');
+  try {
+    id = cache.get(key);
+    if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+    var folder = subFolder_(subFolder_(photoRoot_(), date), teamName);
+    cache.put(key, folder.getId(), 21600);
+    return folder;
+  } finally { lock.releaseLock(); }
 }

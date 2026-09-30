@@ -214,12 +214,12 @@ export const liveMethods = {
   async uploadPendingPhotos() {
     const s = this.state;
     if (!api.session() || !api.online()) return true;
-    let ok = true;
+    const jobs = [];
     for (const t of this.constructor.T) for (const k of ['before', 'after']) {
       const p = s.photos[t.id] && s.photos[t.id][k];
-      if (p && p.pending) ok = (await this.uploadPhoto(t.id, k)) && ok;
+      if (p && p.pending) jobs.push(this.uploadPhoto(t.id, k));
     }
-    return ok;
+    return (await Promise.all(jobs)).every(Boolean);
   },
 
   async liveRemovePhoto(id, k) {
@@ -239,9 +239,9 @@ export const liveMethods = {
     if (!api.online()) return this.toast('No signal — report NOT submitted. It is saved on this phone as a draft; submit again when you have signal.', 'err');
     this.setState({ busy: 'act' });
     try {
-      for (const k of ['before', 'after']) {
-        if (this.state.photos[id][k] && this.state.photos[id][k].pending && !(await this.uploadPhoto(id, k))) throw new Error('Photos did not upload — report NOT submitted. Try again.');
-      }
+      // Before and after photos upload at the same time, not one after the other.
+      const sent = await Promise.all(['before', 'after'].map(k => this.state.photos[id][k] && this.state.photos[id][k].pending ? this.uploadPhoto(id, k) : true));
+      if (!sent.every(Boolean)) throw new Error('Photos did not upload — report NOT submitted. Try again.');
       const r = await api.call('submitReport', { teamId: id, reportDate: this.state.today, report: toServerForm(this.state.forms[id]) });
       const at = api.timeOf(r.submittedAt);
       this.setState(s => ({ actAt: { ...s.actAt, [id]: at }, showErr: { ...s.showErr, [id]: false }, saved: { ...s.saved, [id]: { ...s.forms[id] } }, draftAt: { ...s.draftAt, [id]: at } }), () => {

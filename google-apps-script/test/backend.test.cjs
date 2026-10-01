@@ -77,7 +77,7 @@ ok('[3] stolen token without the phone\'s device key refused', r.auth === true);
 r = B.raw({ action: 'load', token: T.t2, deviceKey: B.deviceKey('someOtherPhone') });
 ok('[3] stolen token used with another enrolled phone\'s key refused', r.auth === true);
 ok('[3] stolen-token attempt written to the audit log', B.env.readAll_('AuditLog').some(a => a.action === 'DENIED session used from another device' && a.user === 'Glenn Butiong'));
-ok('sessions are short: leadman 72 h, admin 8 h', Math.abs(lead2.expiresAt - Date.now() - 72 * 3600e3) < 60e3 && Math.abs(admin.expiresAt - Date.now() - 8 * 3600e3) < 60e3);
+ok('sign in once: leadman stays signed in a year, admin a month', Math.abs(lead2.expiresAt - Date.now() - 365 * 24 * 3600e3) < 60e3 && Math.abs(admin.expiresAt - Date.now() - 30 * 24 * 3600e3) < 60e3);
 
 // ── [1] forged teamId / [2] leadman calling admin endpoints ─────────────
 let L = call({ action: 'load', token: T.t2 });

@@ -33,7 +33,8 @@ function db_() {
 }
 // Sessions are short and bound to the phone that signed in. Work queued offline is kept on the phone
 // and sent after the next sign-in, so a short leadman session never loses data.
-var SESSION_HOURS = { leadman: 72, admin: 8 };
+// Leadmen tap their name once and stay signed in (a year); the admin signs in with a PIN once a month.
+var SESSION_HOURS = { leadman: 24 * 365, admin: 24 * 30 };
 var ENROLL_HOURS = 24;                                  // a setup link connects ONE phone, once, within this time
 var MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 var LOGIN_LIMITS = { perDevice: 5, global: 20, minutes: 15 };

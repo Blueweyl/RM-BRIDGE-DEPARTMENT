@@ -426,7 +426,8 @@ function team_(req) {
     var lock = LockService.getScriptLock();
     if (lock.tryLock(10000)) { LOCKED = true; try { tidyRoster_(); } finally { LOCKED = false; lock.releaseLock(); } }
   }
-  var since = shiftDate_(today_(), -RECENT_DAYS);
+  // Normal start: only today's and yesterday's state (is it sent?). The last 2 weeks only when the leadman opens Previous reports.
+  var since = req.history ? shiftDate_(today_(), -RECENT_DAYS) : yesterday_();
   var reports = readAll_('Reports').filter(function (r) { return r.teamId === t.teamId && r.reportDate >= since && r.state === 'submitted'; })
     .sort(function (a, b) { return b.reportDate.localeCompare(a.reportDate); })
     .map(function (r) {

@@ -1,15 +1,17 @@
 // Bridge NLEX Daily Report — the screens. Plain components: every value and action comes from App.jsx.
-import React from 'react';
+// The busy ones are wrapped in React.memo and get stable handlers from App.jsx, so a tap or a key
+// only re-draws what changed (one person's row, one field), which keeps typing smooth on slow phones.
+import React, { memo } from 'react';
 import { ABSENT_REASONS } from './rules.js';
 
 const LOGO = './savvice-logo.png';
 export const STEPS = ['Attendance', 'Work details', 'Photos', 'Review'];
 
-export function Header({ team, onChangeTeam, saved, dateLabel }) {
+export const Header = memo(function Header({ team, onChangeTeam, saved, dateLabel }) {
   return (
     <header className="top">
       <div className="top-row">
-        <img src={LOGO} alt="Savvice" className="top-logo" />
+        <img src={LOGO} alt="Savvice" className="top-logo" width="69" height="30" />
         <div className="top-title">
           <div className="top-app">Daily Report</div>
           {team && <div className="top-team">{team}</div>}
@@ -24,7 +26,7 @@ export function Header({ team, onChangeTeam, saved, dateLabel }) {
       )}
     </header>
   );
-}
+});
 
 export function Banner({ tone = 'info', title, children, action, actionLabel, second, secondLabel }) {
   return (
@@ -61,7 +63,8 @@ export function TeamPicker({ teams, loading, error, onPick, onRetry, connected, 
   );
 }
 
-export function StepBar({ step, onGo, done }) {
+export const StepBar = memo(function StepBar({ step, onGo, done: doneKey }) {
+  const done = String(doneKey || '').split(',').map(x => x === '1');   // a string, so memo can compare it
   return (
     <nav className="steps" aria-label="Report steps">
       {STEPS.map((label, i) => (
@@ -72,7 +75,34 @@ export function StepBar({ step, onGo, done }) {
       ))}
     </nav>
   );
-}
+});
+
+const PersonRow = memo(function PersonRow({ personId, name, role, status, note, showErr, onSet }) {
+  const away = status !== 'Present', needReason = status === 'Absent';
+  return (
+    <li className={'person' + (away ? ' away' : '') + (needReason && showErr ? ' err' : '')}>
+      <div className="person-row">
+        <span className="person-name">{name}{role === 'Leadman' && <span className="tag">Leadman</span>}</span>
+        <div className="toggle" role="group" aria-label={'Attendance for ' + name}>
+          <button className={!away ? 'on ok' : ''} aria-pressed={!away} onClick={() => onSet(personId, { status: 'Present', note: '' })}>Present</button>
+          <button className={away ? 'on bad' : ''} aria-pressed={away} onClick={() => !away && onSet(personId, { status: 'Absent', note: '' })}>Absent</button>
+        </div>
+      </div>
+      {away && (
+        <div className="reasons" role="group" aria-label={'Why is ' + name + ' absent?'}>
+          <span className={'reason-q' + (needReason && showErr ? ' err-text' : '')}>Why?</span>
+          {ABSENT_REASONS.map(r => (
+            <button key={r} className={'chip' + (status === r ? ' on' : '')} aria-pressed={status === r} onClick={() => onSet(personId, { status: r, note: r === 'Other' ? note : '' })}>{r}</button>
+          ))}
+          {status === 'Other' && (
+            <input className="input" placeholder="Reason (optional)" maxLength={200} value={note} aria-label={'Reason for ' + name}
+              onChange={e => onSet(personId, { status: 'Other', note: e.target.value })} />
+          )}
+        </div>
+      )}
+    </li>
+  );
+});
 
 export function AttendanceStep({ people, present, total, onSet, showErr }) {
   return (
@@ -83,32 +113,7 @@ export function AttendanceStep({ people, present, total, onSet, showErr }) {
       </div>
       <p className="hint">Everyone is marked Present. Tap <b>Absent</b> only for people who are not here.</p>
       <ul className="people">
-        {people.map(p => {
-          const away = p.status !== 'Present', needReason = p.status === 'Absent';
-          return (
-            <li key={p.personId} className={'person' + (away ? ' away' : '') + (needReason && showErr ? ' err' : '')}>
-              <div className="person-row">
-                <span className="person-name">{p.name}{p.role === 'Leadman' && <span className="tag">Leadman</span>}</span>
-                <div className="toggle" role="group" aria-label={'Attendance for ' + p.name}>
-                  <button className={!away ? 'on ok' : ''} aria-pressed={!away} onClick={() => onSet(p.personId, { status: 'Present', note: '' })}>Present</button>
-                  <button className={away ? 'on bad' : ''} aria-pressed={away} onClick={() => !away && onSet(p.personId, { status: 'Absent', note: '' })}>Absent</button>
-                </div>
-              </div>
-              {away && (
-                <div className="reasons" role="group" aria-label={'Why is ' + p.name + ' absent?'}>
-                  <span className={'reason-q' + (needReason && showErr ? ' err-text' : '')}>Why?</span>
-                  {ABSENT_REASONS.map(r => (
-                    <button key={r} className={'chip' + (p.status === r ? ' on' : '')} aria-pressed={p.status === r} onClick={() => onSet(p.personId, { status: r, note: r === 'Other' ? p.note : '' })}>{r}</button>
-                  ))}
-                  {p.status === 'Other' && (
-                    <input className="input" placeholder="Reason (optional)" maxLength={200} value={p.note} aria-label={'Reason for ' + p.name}
-                      onChange={e => onSet(p.personId, { status: 'Other', note: e.target.value })} />
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
+        {people.map(p => <PersonRow key={p.personId} personId={p.personId} name={p.name} role={p.role} status={p.status} note={p.note} showErr={showErr} onSet={onSet} />)}
       </ul>
       {!people.length && <p className="hint">No crew list yet. It loads when there is signal.</p>}
     </section>
@@ -173,15 +178,15 @@ export function WorkStep({ work, set, templates, onTemplate, manpower, errs }) {
   );
 }
 
-function PhotoSlot({ label, type, need, photo, preview, onFile, onRemove, err }) {
+const PhotoSlot = memo(function PhotoSlot({ label, type, need, photo, preview, uploading, onFile, onRemove, err }) {
   const state = !photo ? (need ? 'Required' : 'Optional')
     : photo.lost ? 'Missing — take it again' : photo.refused ? 'Not accepted — take it again'
-    : photo.uploaded ? '✓ Saved' : 'Will upload when there is signal';
+    : photo.uploaded ? '✓ Saved' : uploading ? 'Uploading…' : 'Will upload when there is signal';
   const tone = !photo ? (need ? 'need' : '') : photo.lost || photo.refused ? 'bad' : photo.uploaded ? 'ok' : 'wait';
   return (
     <div className={'photo' + (err ? ' err' : '')}>
       <div className="photo-head"><b>{label}</b><span className={'pill ' + tone}>{state}</span></div>
-      {photo && preview && <img className="photo-img" src={preview} alt={label + ' photo'} />}
+      {photo && preview && <img className="photo-img" src={preview} alt={label + ' photo'} decoding="async" />}
       {photo && !preview && <div className="photo-img empty">{photo.uploaded ? 'Photo saved' : 'Photo'}</div>}
       {photo && photo.refused && <span className="err-text">{photo.refused}</span>}
       <div className="photo-btns">
@@ -197,14 +202,14 @@ function PhotoSlot({ label, type, need, photo, preview, onFile, onRemove, err })
       </div>
     </div>
   );
-}
+});
 
-export function PhotosStep({ photos, previews, complete, onFile, onRemove, errs }) {
+export function PhotosStep({ photos, previews, uploading = {}, complete, onFile, onRemove, errs }) {
   return (
     <section className="card">
       <h2 className="h2">Photos</h2>
-      <PhotoSlot label="Before" type="before" need photo={photos.before} preview={photos.before && previews[photos.before.clientId]} onFile={onFile} onRemove={onRemove} err={errs.before} />
-      <PhotoSlot label="After" type="after" need={complete} photo={photos.after} preview={photos.after && previews[photos.after.clientId]} onFile={onFile} onRemove={onRemove} err={errs.after} />
+      <PhotoSlot label="Before" type="before" need photo={photos.before} preview={photos.before && previews[photos.before.clientId]} uploading={!!(photos.before && uploading[photos.before.clientId])} onFile={onFile} onRemove={onRemove} err={errs.before} />
+      <PhotoSlot label="After" type="after" need={complete} photo={photos.after} preview={photos.after && previews[photos.after.clientId]} uploading={!!(photos.after && uploading[photos.after.clientId])} onFile={onFile} onRemove={onRemove} err={errs.after} />
       <p className="hint">{complete ? 'After photo is needed because the work is Complete.' : 'After photo is optional while the work is Ongoing.'}</p>
     </section>
   );
@@ -229,7 +234,7 @@ export function Summary({ team, dateLabel, work, present, total, absent, photos,
       {photos && (
         <div className="thumbs">
           {['before', 'after'].map(k => photos[k] ? (
-            previews[photos[k].clientId] ? <img key={k} src={previews[photos[k].clientId]} alt={k + ' photo'} /> : <div key={k} className="thumb-empty">{k === 'before' ? 'Before' : 'After'} ✓</div>
+            previews[photos[k].clientId] ? <img key={k} src={previews[photos[k].clientId]} alt={k + ' photo'} decoding="async" /> : <div key={k} className="thumb-empty">{k === 'before' ? 'Before' : 'After'} ✓</div>
           ) : null)}
         </div>
       )}

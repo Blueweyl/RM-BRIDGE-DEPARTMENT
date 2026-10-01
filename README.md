@@ -30,7 +30,8 @@ npm run dev            # local dev server with a pretend office (demo crews), no
 npm run build          # production files → frontend/dist/ (no demo code or data)
 npm run build:demo     # demo build, for training
 npm run test:backend   # backend checks: every rule, duplicates, locking, audit, upgrades
-npm run test:e2e       # phone tests against the real backend code (offline, lost answers, two phones)
+npm run test:e2e       # phone tests against the real backend code (offline, lost answers, two phones, 360 px)
+npm run perf           # speed check on a simulated slow Android phone (see docs/PERFORMANCE.md)
 ```
 
 | File | What it does |
@@ -39,7 +40,8 @@ npm run test:e2e       # phone tests against the real backend code (offline, los
 | `src/screens.jsx` | The screens (team list, the four steps, success, sent, waiting, previous reports). |
 | `src/rules.js` | What a report needs before it can be submitted (the server checks the same again). |
 | `src/api.js` | Calls to the backend, values saved on the phone, Manila time. |
-| `src/photo.js`, `src/idb.js` | Photo compression and stamping; photos waiting on the phone (IndexedDB). |
+| `src/photo.js`, `src/photo.worker.js`, `src/photo-core.js` | Photo resize, stamp and compression, done once in a background worker (main-thread fallback). |
+| `src/idb.js` | Photos waiting on the phone (IndexedDB, as JPEG files). |
 | `src/templates.js` | Common work descriptions per team. |
 | `src/demo.js` | Demo builds only: a pretend office in the browser. Not in the production build. |
 

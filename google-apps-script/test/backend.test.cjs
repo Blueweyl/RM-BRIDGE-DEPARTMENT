@@ -144,6 +144,12 @@ r = up({ type: 'after' });
 ok('a photo for a report already sent is refused', !r.ok && r.alreadySubmitted);
 T2 = call({ action: 'team', teamId: 'team2' });
 ok('team shows today\'s report as sent (the app locks it)', T2.reports.length === 1 && T2.reports[0].reportDate === today && T2.reports[0].present === '7/9' && T2.reports[0].before && T2.reports[0].after);
+{
+  const old = B.env.shiftDate_(today, -5);
+  B.env.upsert_('Reports', 'team2|' + old, { key: 'team2|' + old, teamId: 'team2', reportDate: old, state: 'submitted', reportId: 'R-OLD', location: 'Old place' });
+  ok('team: normal start sends only today/yesterday; history sends the last 2 weeks', !call({ action: 'team', teamId: 'team2' }).reports.some(r => r.reportDate === old) && call({ action: 'team', teamId: 'team2', history: true }).reports.some(r => r.reportDate === old));
+  B.env.upsert_('Reports', 'team2|' + old, { state: 'reopened' });
+}
 
 // ── Concurrency: writes take the script lock ────────────────────────────
 const realLock = B.env.LockService.getScriptLock;

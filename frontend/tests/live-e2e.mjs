@@ -39,8 +39,9 @@ let failed = 0;
 const ok = (name, cond, detail) => { if (!cond) failed++; console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (!cond && detail !== undefined ? '  [' + detail + ']' : '')); };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium' });
 
-async function phone() {
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Manila' });
+async function phone(width = 390, init) {
+  const ctx = await browser.newContext({ viewport: { width, height: 800 }, timezoneId: 'Asia/Manila' });
+  if (init) await ctx.addInitScript(init);
   await ctx.route(BACKEND, async route => {
     const body = JSON.parse(route.request().postData());
     calls[body.action] = (calls[body.action] || 0) + 1;
@@ -96,7 +97,7 @@ try {
   const SRC = path.join(HERE, '..', 'src');
   const appSrc = ['App.jsx', 'screens.jsx', 'rules.js', 'photo.js', 'main.jsx'].map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n');
   ok('old sign-in files are gone', !['View.jsx', 'live.js', 'css.js', 'demo.jsx'].some(f => fs.existsSync(path.join(SRC, f))));
-  ok('app source has no PIN, login, session token or setup key', !/\bpin\b|PIN|login|signIn|sessionToken|deviceKey|setup key/i.test(appSrc));
+  ok('app source has no PIN, login, session token or setup key', !/\bpin\b|login|signIn|sessionToken|deviceKey|setup key/i.test(appSrc));
   ok('production bundle has no demo crews or demo backend', !/Juan Santos|Demo Bridge Team|bnlex\.demo\.|Pijay/.test(bundle));
   ok('production bundle has no PIN keypad', !/Digit 1|Enter your 4-digit PIN|Sign in with PIN/.test(bundle));
 
@@ -229,6 +230,38 @@ try {
   ok('then the report goes through', await waitText(S.page, 'Report sent') && report('team3').crewPresent === (B.call({ action: 'team', teamId: 'team3' }).roster.length + '/' + B.call({ action: 'team', teamId: 'team3' }).roster.length));
   ok('no page errors on phone S', !S.page.errors.length, S.page.errors.join(' | '));
   await S.ctx.close();
+
+  // ── Small Android screen (360 px), an older phone with no background photo worker ──
+  const W = await phone(360, () => { delete window.OffscreenCanvas; });
+  await W.page.goto(LINK); await waitText(W.page, 'Choose your team');
+  const layout = async () => W.page.evaluate(() => {
+    const wide = document.documentElement.scrollWidth > window.innerWidth + 1;
+    const small = [...document.querySelectorAll('button, .btn, input:not([type=file]), select')].filter(e => e.offsetParent && e.getBoundingClientRect().height < 44).map(e => (e.innerText || e.getAttribute('aria-label') || e.tagName).slice(0, 30));
+    return { wide, small };
+  });
+  const lay = [];
+  await pickTeam(W.page, 'Bridge Epoxy 2');
+  lay.push(await layout());
+  await click(W.page, 'Next: Work details'); lay.push(await layout());
+  await W.page.locator('textarea').first().pressSequentially('Scaffolding at pier 3');
+  await W.page.reload();                                   // straight after typing: the pending autosave is written on the way out
+  ok('reload right after typing keeps what was typed', await until(async () => (await W.page.locator('textarea').first().inputValue().catch(() => '')) === 'Scaffolding at pier 3'));
+  await fillWork(W.page, 'Pier 3', 'Ongoing');
+  await click(W.page, 'Next: Photos'); lay.push(await layout());
+  await W.ctx.setOffline(true);
+  await W.page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await photoFile(W.page, 'Take Before photo');
+  ok('no background worker: the photo is still prepared (fallback)', await W.page.waitForSelector('img[alt="Before photo"]').then(() => true, () => false));
+  ok('offline photo waits on the phone', await waitText(W.page, 'Will upload when there is signal'));
+  await click(W.page, 'Next: Review'); lay.push(await layout());
+  ok('360 px: no sideways scrolling on any step', lay.every(l => !l.wide), JSON.stringify(lay));
+  ok('360 px: every button and field at least 44 px tall', lay.every(l => !l.small.length), JSON.stringify(lay.map(l => l.small)));
+  await W.ctx.setOffline(false);
+  await W.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await click(W.page, 'SUBMIT DAILY REPORT');
+  ok('back online: photo uploads and the report is sent', await waitText(W.page, 'Report sent', 15000) && !!report('team4') && !!report('team4').beforePhotoId);
+  ok('no page errors on the 360 px phone', !W.page.errors.length, W.page.errors.join(' | '));
+  await W.ctx.close();
 
   // ── An old-version phone: sign-in data removed, unsent work kept as a copy ──
   const O = await phone();

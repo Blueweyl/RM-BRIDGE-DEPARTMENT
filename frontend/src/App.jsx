@@ -7,7 +7,7 @@
 import React from 'react';
 import * as api from './api.js';
 import * as idb from './idb.js';
-import { prepare } from './photo.js';
+import { prepare, asDataUrl, previewUrl } from './photo.js';
 import { attendanceOf, counts, problems } from './rules.js';
 import { templatesFor } from './templates.js';
 import {
@@ -34,6 +34,7 @@ function cleanDraft(d, teamId, date, unit) {
     photos: d.photos && typeof d.photos === 'object' ? d.photos : {},
   };
 }
+const SAVE_DELAY = 600;   // ms: typing is saved on the phone shortly after the last key, and at once when the app is hidden
 const asMap = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
 export default class App extends React.Component {
@@ -63,8 +64,22 @@ export default class App extends React.Component {
       photoError: '',
       storageFull: false,
       busyPhoto: '',
+      uploading: {},
+      yDraft: null,
+      historyLoading: false,
     };
-    if (teamId) this.state.draft = this.loadDraft(teamId, today, this.state.teamData);
+    if (teamId) { this.state.draft = this.loadDraft(teamId, today, this.state.teamData); this.state.yDraft = this.findYDraft(teamId, today); }
+    // Stable handlers, so screens that did not change are not re-drawn (React.memo in screens.jsx).
+    this.onSetAtt = (personId, v) => this.change(dr => ({ ...dr, att: { ...dr.att, [personId]: v } }));
+    this.onWork = (k, v) => this.change(dr => ({ ...dr, work: { ...dr.work, [k]: v } }));
+    this.onTemplate = t => t && this.change(dr => ({ ...dr, work: { ...dr.work, details: t } }));
+    this.onGo = i => this.goStep(i);
+    this.onFile = (type, f) => this.addPhoto(type, f);
+    this.onRemove = type => this.removePhoto(type);
+    this.onChangeTeam = () => { this.flush(); this.set({ view: 'teams' }, () => this.loadTeams()); };
+    this.toPrevious = () => { this.set({ view: 'previous' }, () => window.scrollTo(0, 0)); this.loadHistory(); };
+    this.onPick = id => this.pickTeam(id);
+    this.onRetryTeams = () => this.loadTeams();
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -74,8 +89,10 @@ export default class App extends React.Component {
     this.onOffline = () => this.setState({ online: false });
     window.addEventListener('online', this.onOnline);
     window.addEventListener('offline', this.onOffline);
-    this.onVisible = () => { if (document.visibilityState === 'visible') { this.checkDay(); this.sendAll(); } };
+    this.onVisible = () => { if (document.visibilityState === 'visible') { this.checkDay(); this.sendAll(); } else this.flush(); };
     document.addEventListener('visibilitychange', this.onVisible);
+    this.onHide = () => this.flush();
+    window.addEventListener('pagehide', this.onHide);
     this.timer = setInterval(() => { this.checkDay(); this.sendAll(); }, 60000);
     this.loadPreviews();
     this.cleanOld();
@@ -87,15 +104,17 @@ export default class App extends React.Component {
     window.removeEventListener('online', this.onOnline);
     window.removeEventListener('offline', this.onOffline);
     document.removeEventListener('visibilitychange', this.onVisible);
+    window.removeEventListener('pagehide', this.onHide);
     clearInterval(this.timer);
+    this.flush();
   }
   set(patch, cb) { if (this.alive !== false) this.setState(patch, cb); }
 
-  /** Load the teams list and this team's crew list (when there is signal). */
+  /** With a team chosen: only that team's crew list and today's state (one call). The team list loads only on the team screen. */
   refresh() {
     if (!api.isConnected()) return;
-    this.loadTeams();
     if (this.state.teamId) this.loadTeam(this.state.teamId);
+    if (!this.state.teamId || !this.state.teams.length || this.state.view === 'teams') this.loadTeams();
   }
   loadTeams() {
     this.set({ teamsLoading: true, teamsError: '' });
@@ -107,7 +126,8 @@ export default class App extends React.Component {
   }
   loadTeam(teamId) {
     return api.call('team', { teamId }).then(r => {
-      const data = { team: r.team, roster: r.roster || [], reports: r.reports || [], at: Date.now() };
+      const old = this.state.teamId === teamId && this.state.teamData;
+      const data = { team: r.team, roster: r.roster || [], reports: r.reports || [], history: (old && old.history) || null, at: Date.now() };
       api.saveLocal('teamData.' + teamId, data);
       if (this.state.teamId !== teamId) return;
       this.set(s => {
@@ -124,14 +144,35 @@ export default class App extends React.Component {
     });
   }
 
+  /** Previous reports (last 2 weeks): fetched only when the leadman opens them. */
+  loadHistory() {
+    const teamId = this.state.teamId;
+    if (!api.isConnected() || !teamId) return;
+    this.set({ historyLoading: true });
+    api.call('team', { teamId, history: true }).then(r => {
+      if (this.state.teamId !== teamId) return;
+      this.set(s => {
+        const data = { ...(s.teamData || {}), history: r.reports || [] };
+        api.saveLocal('teamData.' + teamId, data);
+        return { teamData: data, historyLoading: false };
+      });
+    }).catch(() => this.set({ historyLoading: false }));
+  }
+  findYDraft(teamId, today) {
+    const y = api.shiftDay(today, -1);
+    const d = cleanDraft(api.loadLocal(this.draftKey(teamId, y)), teamId, y);
+    return d && d.touched ? d : null;
+  }
+
   checkDay() {
     const today = api.manilaDay();
     if (today === this.state.today) return;
+    this.flush();
     this.set(s => {
       // Still on yesterday's unfinished report? Keep it open; otherwise move on to the new day.
       const keep = s.date === s.today && s.draft && s.draft.touched && !this.isLocked(s, s.date);
       const date = keep ? s.date : today;
-      return { today, date, draft: s.teamId ? this.loadDraft(s.teamId, date, s.teamData) : null, justSent: '', serverProblems: [], showErr: [false, false, false, false] };
+      return { today, date, draft: s.teamId ? this.loadDraft(s.teamId, date, s.teamData) : null, yDraft: s.teamId ? this.findYDraft(s.teamId, today) : null, justSent: '', serverProblems: [], showErr: [false, false, false, false] };
     }, () => this.loadPreviews());
     this.cleanOld();
   }
@@ -160,15 +201,29 @@ export default class App extends React.Component {
     const unit = teamData && teamData.team && teamData.team.unit;
     return cleanDraft(api.loadLocal(this.draftKey(teamId, date)), teamId, date, unit) || newDraft(teamId, date, unit);
   }
-  /** Every change goes through here: saved on the phone at once. */
+  /**
+   * Every change goes through here. The screen updates at once; the draft is written to the phone
+   * shortly after the last change (one write per pause in typing, not one per key), and at once when
+   * the app is hidden, closed, or the report is submitted.
+   */
   change(fn) {
-    this.set(s => {
-      if (!s.draft) return null;
-      const draft = { ...fn(s.draft), touched: true };
-      const ok = api.saveLocal(this.draftKey(draft.teamId, draft.date), draft);
-      return { draft, storageFull: !ok };
-    });
+    this.set(s => (s.draft ? { draft: { ...fn(s.draft), touched: true } } : null));
+    clearTimeout(this.saveTimer);
+    this.dirty = true;
+    this.saveTimer = setTimeout(() => this.flush(), SAVE_DELAY);
   }
+  /** Write the current draft to the phone now (if anything changed). */
+  flush() {
+    clearTimeout(this.saveTimer);
+    if (!this.dirty) return;
+    this.dirty = false;
+    const d = this.state.draft;
+    if (!d) return;
+    const ok = api.saveLocal(this.draftKey(d.teamId, d.date), d);
+    if (ok === !!this.state.storageFull) this.set({ storageFull: !ok });
+  }
+  /** Drop a pending write (the draft was replaced or sent). */
+  cancelSave() { clearTimeout(this.saveTimer); this.dirty = false; }
   loadPreviews() {
     const want = [];
     const add = d => Object.values((d && d.photos) || {}).forEach(p => p && p.clientId && want.push(p.clientId));
@@ -177,16 +232,17 @@ export default class App extends React.Component {
     if (this.state.queue[k]) add(this.state.queue[k].draft);
     if (this.state.sent[k]) add(this.state.sent[k].draft);
     want.filter(id => !this.state.previews[id]).forEach(id => {
-      idb.get(photoKey(id)).then(v => { if (v && v.preview) this.set(s => ({ previews: { ...s.previews, [id]: v.preview } })); }).catch(() => {});
+      idb.get(photoKey(id)).then(v => { if (v && v.preview) this.set(s => (s.previews[id] ? null : { previews: { ...s.previews, [id]: previewUrl(v.preview) } })); }).catch(() => {});
     });
   }
 
   // ── Team ───────────────────────────────────────────────────────────────
   pickTeam(teamId) {
+    this.flush();
     api.saveLocal('team', teamId);
     const teamData = api.loadLocal('teamData.' + teamId);
     const date = this.state.today;
-    this.set({ teamId, teamData, date, view: 'report', draft: this.loadDraft(teamId, date, teamData), justSent: '', serverProblems: [], showErr: [false, false, false, false], notice: '' },
+    this.set({ teamId, teamData, date, view: 'report', draft: this.loadDraft(teamId, date, teamData), yDraft: this.findYDraft(teamId, date), justSent: '', serverProblems: [], showErr: [false, false, false, false], notice: '' },
       () => { this.loadPreviews(); window.scrollTo(0, 0); });
     this.loadTeam(teamId);
   }
@@ -203,10 +259,11 @@ export default class App extends React.Component {
       } catch (e) {
         throw new Error(idb.isQuota(e) ? 'This phone is out of space. Delete some old photos or videos, then try again.' : 'Could not save the photo on this phone. Try again.');
       }
-      const old = d.photos[type];
-      this.set(st => ({ previews: { ...st.previews, [clientId]: p.preview } }));
+      const old = this.state.draft.photos[type];
+      const url = previewUrl(p.preview);
+      this.set(st => ({ previews: { ...st.previews, [clientId]: url } }));
       this.change(dr => ({ ...dr, photos: { ...dr.photos, [type]: { clientId, time: p.capturedAt, uploaded: false } } }));
-      if (old && old.clientId) idb.del(photoKey(old.clientId)).catch(() => {});
+      if (old && old.clientId) this.forgetPhoto(old.clientId);
       this.set({ busyPhoto: '' });
       this.uploadPhoto(d.teamId, d.date, type, clientId).catch(() => {});
     } catch (e) {
@@ -216,20 +273,37 @@ export default class App extends React.Component {
   removePhoto(type) {
     const old = this.state.draft.photos[type];
     this.change(dr => { const photos = { ...dr.photos }; delete photos[type]; return { ...dr, photos }; });
-    if (old && old.clientId) idb.del(photoKey(old.clientId)).catch(() => {});
+    if (old && old.clientId) this.forgetPhoto(old.clientId);
+  }
+  forgetPhoto(clientId) {
+    idb.del(photoKey(clientId)).catch(() => {});
+    const url = this.state.previews[clientId];
+    if (url && url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.set(s => { const previews = { ...s.previews }; delete previews[clientId]; return { previews }; });
   }
   /** Send one photo to the office. Returns the photo's server info; throws like api.call. */
   async uploadPhoto(teamId, date, type, clientId) {
     const stored = await idb.get(photoKey(clientId)).catch(() => null);
     if (!stored || !stored.full) { this.markPhoto(teamId, date, clientId, { lost: true }); const e = new Error('A photo is missing on this phone. Take it again.'); e.photoLost = true; throw e; }
-    try {
-      const r = await api.call('uploadPhoto', { teamId, reportDate: date, type, clientId, dataUrl: stored.full }, { timeout: 90000 });
-      this.markPhoto(teamId, date, clientId, { uploaded: true, photoId: r.photo && r.photo.photoId, refused: '' });
-      return r.photo;
-    } catch (e) {
-      if (!e.offline && !e.notConnected && !e.alreadySubmitted) this.markPhoto(teamId, date, clientId, { refused: e.message });
-      throw e;
-    }
+    if (this.uploads && this.uploads[clientId]) return this.uploads[clientId];   // already on its way: wait for that one
+    this.uploads = this.uploads || {};
+    const run = (async () => {
+      this.set(s => ({ uploading: { ...s.uploading, [clientId]: true } }));
+      try {
+        const dataUrl = await asDataUrl(stored.full);   // built only now, and only for this upload
+        const r = await api.call('uploadPhoto', { teamId, reportDate: date, type, clientId, dataUrl }, { timeout: 90000 });
+        this.markPhoto(teamId, date, clientId, { uploaded: true, photoId: r.photo && r.photo.photoId, refused: '' });
+        return r.photo;
+      } catch (e) {
+        if (!e.offline && !e.notConnected && !e.alreadySubmitted) this.markPhoto(teamId, date, clientId, { refused: e.message });
+        throw e;
+      } finally {
+        delete this.uploads[clientId];
+        this.set(s => { const uploading = { ...s.uploading }; delete uploading[clientId]; return { uploading }; });
+      }
+    })();
+    this.uploads[clientId] = run;
+    return run;
   }
   /** Update a photo in the draft (if it is still the one in the draft). */
   markPhoto(teamId, date, clientId, patch) {
@@ -254,6 +328,7 @@ export default class App extends React.Component {
     if (!roster.length) { this.set({ serverProblems: ['The crew list has not loaded yet. Try again when there is signal.'] }); return; }
     const key = d.teamId + '|' + d.date;
     if (s.queue[key]) return;
+    this.flush();
     const item = {
       key, teamId: d.teamId, date: d.date, requestId: api.uuid(), reached: false, error: '',
       draft: { ...d, att: Object.fromEntries(attendanceOf(roster, d.att).map(p => [p.personId, { status: p.status, note: p.note }])) },
@@ -320,10 +395,11 @@ export default class App extends React.Component {
   finishSent(key, item, info) {
     this.set(s => {
       const queue = { ...s.queue }; delete queue[key];
+      const here = s.teamId === item.teamId && s.date === item.date;
       const sent = { ...s.sent, [key]: { date: item.date, teamId: item.teamId, submittedAt: info.submittedAt || '', reportId: info.reportId || '', other: !!info.other, draft: info.other ? null : item.draft, total: item.total, names: item.names, teamName: item.teamName } };
       api.saveLocal('queue', queue); api.saveLocal('sent', sent);
+      if (here) this.cancelSave();
       api.saveLocal(this.draftKey(item.teamId, item.date), null);
-      const here = s.teamId === item.teamId && s.date === item.date;
       return { queue, sent, justSent: here && !info.other ? key : s.justSent };
     });
     if (!info.other) this.loadTeam(item.teamId);
@@ -334,6 +410,7 @@ export default class App extends React.Component {
     if (t && d.photos[t]) d.photos[t] = { ...d.photos[t], ...(e.photoLost ? { lost: true } : { refused: e.message }) };
     const list = e.rosterChanged ? [e.message] : e.missing && e.missing.length ? e.missing : [e.message || 'The office could not accept this report.'];
     const step = e.rosterChanged ? 0 : t ? 2 : 3;
+    if (this.state.teamId === item.teamId && this.state.date === item.date) this.cancelSave();
     api.saveLocal(this.draftKey(item.teamId, item.date), { ...d, step });
     this.set(s => {
       const queue = { ...s.queue }; delete queue[key];
@@ -348,6 +425,7 @@ export default class App extends React.Component {
     const item = this.state.queue[key];
     if (!item || item.reached || this.state.sending[key]) return;
     const d = { ...item.draft, step: 3 };
+    this.cancelSave();
     api.saveLocal(this.draftKey(item.teamId, item.date), d);
     this.set(s => { const queue = { ...s.queue }; delete queue[key]; api.saveLocal('queue', queue); return { queue, draft: d }; });
   }
@@ -404,7 +482,7 @@ export default class App extends React.Component {
           <Header />
           {banners}
           <TeamPicker teams={s.teams} loading={s.teamsLoading} error={s.teamsError} connected={s.connected} current={s.teamId}
-            onPick={id => this.pickTeam(id)} onRetry={() => this.loadTeams()} />
+            onPick={this.onPick} onRetry={this.onRetryTeams} />
           {s.teamId && <BottomBar><button className="btn ghost wide" onClick={() => this.set({ view: 'report' })}>Back</button></BottomBar>}
         </>
       );
@@ -412,29 +490,29 @@ export default class App extends React.Component {
 
     const team = this.teamInfo(), key = s.teamId + '|' + s.date;
     const dateLabel = (s.date === s.today ? 'Today, ' : 'Yesterday, ') + api.fmtDay(s.date, { weekday: 'short', month: 'short', day: 'numeric' });
-    const header = <Header team={team.name} onChangeTeam={() => this.set({ view: 'teams' }, () => this.loadTeams())} dateLabel={dateLabel} saved={s.view === 'report' && s.draft && s.draft.touched && !s.queue[key] && !this.isLocked(s, s.date)} />;
+    const header = <Header team={team.name} onChangeTeam={this.onChangeTeam} dateLabel={dateLabel} saved={s.view === 'report' && s.draft && s.draft.touched && !s.queue[key] && !this.isLocked(s, s.date)} />;
 
     if (s.view === 'previous') {
       const local = Object.values(s.sent).filter(x => x.teamId === s.teamId && x.draft);
-      const reports = ((s.teamData && s.teamData.reports) || []).map(r => ({ ...r, sentTime: api.timeOf(r.submittedAt) }));
+      const td = s.teamData || {}, reports = (td.history || td.reports || []).map(r => ({ ...r, sentTime: api.timeOf(r.submittedAt) }));
       local.forEach(x => {
         if (reports.some(r => r.reportDate === x.date)) return;
         const c = Object.values(x.draft.att).filter(a => a.status === 'Present').length, w = x.draft.work;
         reports.push({ reportDate: x.date, location: w.location, activity: w.details, status: w.status, present: c + '/' + x.total, target: w.target, actual: w.actual, unit: w.unit, after: !!x.draft.photos.after, sentTime: api.timeOf(x.submittedAt) });
       });
       reports.sort((a, b) => b.reportDate.localeCompare(a.reportDate));
-      return <>{header}{banners}<Previous reports={reports} team={team.name} fmt={d => api.fmtDay(d)} onBack={() => this.set({ view: 'report' })} /></>;
+      return <>{header}{banners}{s.historyLoading && !td.history && <Banner tone="info">Loading…</Banner>}<Previous reports={reports} team={team.name} fmt={d => api.fmtDay(d)} onBack={() => this.set({ view: 'report' })} /></>;
     }
-    const toPrevious = () => this.set({ view: 'previous' }, () => window.scrollTo(0, 0));
+    const toPrevious = this.toPrevious;
 
     // Yesterday's report was started here but never sent: offer to finish it (the office accepts yesterday's report).
     const yesterday = api.shiftDay(s.today, -1), yKey = s.teamId + '|' + yesterday;
-    const yDraft = s.date === s.today ? cleanDraft(api.loadLocal(this.draftKey(s.teamId, yesterday)), s.teamId, yesterday) : null;
-    const yBanner = yDraft && yDraft.touched && !s.queue[yKey] && !this.isLocked(s, yesterday)
-      ? <Banner tone="warn" title="Yesterday's report was not sent" action={() => this.set({ date: yesterday, draft: yDraft, justSent: '', serverProblems: [], showErr: [false, false, false, false] }, () => this.loadPreviews())} actionLabel="Finish yesterday's report" />
+    const yDraft = s.date === s.today ? s.yDraft : null;
+    const yBanner = yDraft && !s.queue[yKey] && !this.isLocked(s, yesterday)
+      ? <Banner tone="warn" title="Yesterday's report was not sent" action={() => { this.flush(); this.set({ date: yesterday, draft: this.loadDraft(s.teamId, yesterday, s.teamData), justSent: '', serverProblems: [], showErr: [false, false, false, false] }, () => this.loadPreviews()); }} actionLabel="Finish yesterday's report" />
       : null;
     const backToToday = s.date !== s.today
-      ? <Banner tone="info" action={() => this.set({ date: s.today, draft: this.loadDraft(s.teamId, s.today, s.teamData), justSent: '', serverProblems: [] }, () => this.loadPreviews())} actionLabel="Go to today's report">You are finishing yesterday's report.</Banner>
+      ? <Banner tone="info" action={() => { this.flush(); this.set({ date: s.today, draft: this.loadDraft(s.teamId, s.today, s.teamData), yDraft: this.findYDraft(s.teamId, s.today), justSent: '', serverProblems: [] }, () => this.loadPreviews()); }} actionLabel="Go to today's report">You are finishing yesterday's report.</Banner>
       : null;
 
     // Just sent: the success screen.
@@ -476,37 +554,34 @@ export default class App extends React.Component {
     const c = counts(roster, d.att);
     const probs = problems(d, roster);
     const errsFor = step => (s.showErr[step] ? Object.fromEntries(probs.filter(p => p.step === step).map(p => [p.field, true])) : {});
-    const done = [0, 1, 2].map(i => d.touched && !probs.some(p => p.step === i)).concat([false]);
+    const done = [0, 1, 2].map(i => (d.touched && !probs.some(p => p.step === i) ? '1' : '0')).concat(['0']).join();
     const step = d.step;
     const stepErrors = s.showErr[step] && step < 3 ? probs.filter(p => p.step === step) : [];
 
     let body;
     if (step === 0) {
       body = roster.length || !s.online
-        ? <AttendanceStep people={people} present={c.present} total={c.total} showErr={s.showErr[0]}
-            onSet={(personId, v) => this.change(dr => ({ ...dr, att: { ...dr.att, [personId]: v } }))} />
+        ? <AttendanceStep people={people} present={c.present} total={c.total} showErr={s.showErr[0]} onSet={this.onSetAtt} />
         : <section className="card"><p className="hint" role="status">Loading the crew list…</p></section>;
     } else if (step === 1) {
-      body = <WorkStep work={d.work} errs={errsFor(1)} manpower={c.present} templates={templatesFor(s.teamId)}
-        set={(k, v) => this.change(dr => ({ ...dr, work: { ...dr.work, [k]: v } }))}
-        onTemplate={t => t && this.change(dr => ({ ...dr, work: { ...dr.work, details: t } }))} />;
+      body = <WorkStep work={d.work} errs={errsFor(1)} manpower={c.present} templates={templatesFor(s.teamId)} set={this.onWork} onTemplate={this.onTemplate} />;
     } else if (step === 2) {
       body = (
         <>
           {s.busyPhoto && <Banner tone="info">Preparing the photo…</Banner>}
           {s.photoError && <Banner tone="err">{s.photoError}</Banner>}
-          <PhotosStep photos={d.photos} previews={s.previews} complete={d.work.status === 'Complete'} errs={errsFor(2)}
-            onFile={(type, f) => this.addPhoto(type, f)} onRemove={type => this.removePhoto(type)} />
+          <PhotosStep photos={d.photos} previews={s.previews} uploading={s.uploading} complete={d.work.status === 'Complete'} errs={errsFor(2)}
+            onFile={this.onFile} onRemove={this.onRemove} />
         </>
       );
     } else {
-      body = <ReviewStep summary={this.summaryFor(d, roster)} problems={s.showErr[3] ? probs : []} serverProblems={s.serverProblems} onFix={i => this.goStep(i)} />;
+      body = <ReviewStep summary={this.summaryFor(d, roster)} problems={s.showErr[3] ? probs : []} serverProblems={s.serverProblems} onFix={this.onGo} />;
     }
 
     return (
       <>
         {header}
-        <StepBar step={step} done={done} onGo={i => this.goStep(i)} />
+        <StepBar step={step} done={done} onGo={this.onGo} />
         <main className="page">
           {banners}{backToToday}{yBanner}
           {step < 3 && s.serverProblems.length > 0 && <Banner tone="err">{s.serverProblems.join(' ')}</Banner>}

@@ -62,8 +62,9 @@ so Sheets never runs it as a formula; exports quote such cells too.
 
 ## 3. Photos (Google Drive)
 
-- The phone resizes photos to at most 1600 px (JPEG 0.82, about 200–400 KB) and stamps BEFORE/AFTER,
-  team, Manila time, leadman and location on them. A small preview stays on the phone.
+- The phone resizes photos to at most 1600 px (JPEG 0.8, about 150–450 KB) and stamps BEFORE/AFTER,
+  team, Manila time, leadman and location on them, in a background worker. A small preview stays on the phone.
+  Limits: see [`PERFORMANCE.md`](PERFORMANCE.md).
 - **Private.** Files are never shared by link. The Sheet's Before/After cells are links that open the file
   for the Drive owner. The app never downloads photos from the server; previews come from the phone.
 - **Checked on upload**: the type must match the file's first bytes (JPEG/PNG/WebP), max 6 MB, complete
@@ -80,7 +81,7 @@ words the app shows as they are.
 | Action | Does |
 |---|---|
 | `teams` | Active teams: id, name, short name, leadman, unit. Server date and clock |
-| `team` | One active team: crew list (leadman first) and the reports it sent in the last 14 days |
+| `team` | One active team: crew list (leadman first) and its sent reports for today and yesterday (`history: true`: the last 14 days, for Previous reports) |
 | `uploadPhoto` | `teamId, reportDate, type (before/after), clientId, dataUrl` → photo ID. Refused once that day's report is sent |
 | `submitReport` | `teamId, reportDate, requestId, attendance[], report{fromTime,toTime,location,activityDetails,status,target,actual,unit,plateNumber,remarks}, before/after photo IDs` |
 
@@ -111,9 +112,9 @@ words the app shows as they are.
 ## 6. On the phone
 
 - Saved under `bnlex.live.*` in localStorage: `url` (backend), `team`, `teams`, `teamData.<team>`,
-  `draft.<team>|<date>` (autosaved on every change), `queue` (submitted, waiting for the server),
+  `draft.<team>|<date>` (autosaved 0.6 s after the last change, and at once when the app is hidden), `queue` (submitted, waiting for the server),
   `sent` (confirmed, locks the day), `device` (a random label for the audit log, not a password).
-- Photos wait in IndexedDB (`bnlex` / `photos`) until the report is confirmed.
+- Photos wait in IndexedDB (`bnlex` / `photos`, as JPEG Blobs) until the report is confirmed.
 - A submitted report keeps one request ID until the server answers, so retries never make a second report.
   While no request has reached the server the leadman can still take it back to change something.
 - Unreadable saved data is never thrown away silently: a copy goes to `bnlex.quarantine` and the app says so.

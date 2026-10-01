@@ -1,48 +1,75 @@
-// Photos: compressed on the phone, kept in IndexedDB until the server has them, then uploaded to Google Drive.
+// Photos: processed once (in a background worker when the phone supports it), kept on the phone as
+// JPEG Blobs in IndexedDB until the server has them, then uploaded to Google Drive.
+// Limits are in photo-core.js (LIMITS).
 import * as api from './api.js';
+import { render, LIMITS } from './photo-core.js';
 
-const MAX_UPLOAD = 5.5 * 1024 * 1024;
+export { LIMITS };
 
-/** Resized JPEG as a data URL. `mark` (lines of text) stamps an evidence band on the bottom of the photo. */
-export function compress(file, max = 560, quality = 0.7, mark) {
+let worker = null, seq = 0;
+const waiting = new Map();
+function getWorker() {
+  if (worker !== null) return worker;
+  try {
+    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') throw new Error('no worker');
+    worker = new Worker(new URL('./photo.worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = e => { const w = waiting.get(e.data.id); if (w) { waiting.delete(e.data.id); w(e.data); } };
+    worker.onerror = () => { worker = false; waiting.forEach(w => w({ error: 'worker failed' })); waiting.clear(); };
+  } catch (e) { worker = false; }
+  return worker;
+}
+function inWorker(file, mark) {
+  const w = getWorker();
+  if (!w) return Promise.reject(new Error('no worker'));
   return new Promise((resolve, reject) => {
-    const src = URL.createObjectURL(file), img = new Image();
-    img.onload = () => {
-      try {
-        const sc = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas');
-        c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-        const g = c.getContext('2d'); g.drawImage(img, 0, 0, c.width, c.height);
-        if (mark && mark.length) {
-          const fs = Math.max(11, Math.round(c.width / 42)), lh = Math.round(fs * 1.35), h = lh * mark.length + fs;
-          g.fillStyle = 'rgba(15,37,64,0.78)'; g.fillRect(0, c.height - h, c.width, h);
-          g.fillStyle = '#FFFFFF'; g.font = `700 ${fs}px sans-serif`; g.textBaseline = 'top';
-          mark.forEach((line, i) => g.fillText(String(line).slice(0, 90), Math.round(fs * 0.6), c.height - h + Math.round(fs / 2) + i * lh, c.width - fs));
-        }
-        resolve(c.toDataURL('image/jpeg', quality));
-      } catch (e) { reject(e); } finally { URL.revokeObjectURL(src); }
-    };
-    img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('bad image')); };
-    img.src = src;
+    const id = ++seq;
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error('worker timeout')); }, 60000);
+    waiting.set(id, r => { clearTimeout(timer); if (r.error) reject(new Error(r.error)); else resolve(r); });
+    w.postMessage({ id, file, mark });
   });
 }
 
+/** Main-thread fallback (older phones): still one decode, async encode. */
+async function onMainThread(file, mark) {
+  let bmp;
+  if (typeof createImageBitmap !== 'undefined') {
+    try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { bmp = null; }
+  }
+  let url = null;
+  if (!bmp) {
+    url = URL.createObjectURL(file);
+    bmp = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('bad image')); i.src = url; });
+  }
+  try {
+    return await render(bmp, mark,
+      (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; },
+      (c, q) => new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('encode failed'))), 'image/jpeg', q)));
+  } finally { if (url) URL.revokeObjectURL(url); }
+}
+
 /**
- * A photo the leadman just took → { preview, full, capturedAt }. The full copy (1600 px, stamped with
- * BEFORE/AFTER, team, time and location) is what goes to Drive; the small one is for the screen.
+ * A photo the leadman just took → { full: Blob, preview: Blob, capturedAt }. The full copy (max 1600 px,
+ * stamped with BEFORE/AFTER, team, time and location) is what goes to Drive; the preview is for the screen.
  */
 export async function prepare(file, { type, team, leadman, location }) {
   if (file.type && !/^image\//.test(file.type)) throw new Error('That file is not a photo.');
-  if (file.size > 40 * 1024 * 1024) throw new Error('That photo is too large. Take it again with the camera.');
+  if (file.size > LIMITS.maxInputBytes) throw new Error('That photo is too large. Take it again with the camera.');
   // Capture time: the photo file's own time if recent, else now (phone clock corrected by the server's), in Manila time.
   const recent = file.lastModified && Math.abs(Date.now() - file.lastModified) < 7 * 86400000;
   const capturedAt = api.manilaStamp(recent ? file.lastModified + api.clockSkew() : api.nowMs());
   const mark = [`${type === 'before' ? 'BEFORE' : 'AFTER'} WORK · ${team} · NLEX`, `${capturedAt} (Manila) · ${leadman || ''}`, (location || '').trim() || 'Location not entered yet'];
-  let preview, full;
-  try {
-    preview = await compress(file);
-    full = await compress(file, 1600, 0.82, mark);
-    if (full.length * 0.75 > MAX_UPLOAD) full = await compress(file, 1280, 0.6, mark);
-  } catch (e) { throw new Error('Could not read that photo. Try again.'); }
-  if (full.length * 0.75 > MAX_UPLOAD) throw new Error('That photo is too large. Take it again.');
-  return { preview, full, capturedAt };
+  let out;
+  try { out = await inWorker(file, mark); } catch (e) {
+    try { out = await onMainThread(file, mark); } catch (x) { throw new Error('Could not read that photo. Try again.'); }
+  }
+  if (out.full.size > LIMITS.hardMaxBytes) throw new Error('That photo is too large. Take it again.');
+  return { full: out.full, preview: out.preview, capturedAt };
 }
+
+/** Blob (or an older saved data URL) → data URL, only at upload time. */
+export function asDataUrl(v) {
+  if (typeof v === 'string') return Promise.resolve(v);
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error || new Error('read failed')); r.readAsDataURL(v); });
+}
+/** A preview to show: an object URL for a Blob, or an older saved data URL as is. */
+export function previewUrl(v) { return v && typeof v !== 'string' ? URL.createObjectURL(v) : v || ''; }

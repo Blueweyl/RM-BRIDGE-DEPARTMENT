@@ -163,6 +163,22 @@ export async function call(action, data = {}, { timeout = 45000 } = {}) {
   return j;
 }
 
+/** Leadmen this phone can sign in as by tapping a name (phone must be set up with the admin's link). */
+export async function crews() {
+  await enrollIfNeeded();
+  if (!get('deviceKey')) throw new ApiError(get('enrollErr') ? 'The setup link did not work: ' + get('enrollErr') : 'This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
+  return (await call('crews', { deviceKey: get('deviceKey') })).crews || [];
+}
+
+/** Sign in as a leadman by tapping their name (no PIN). */
+export async function loginAs(userId) {
+  await enrollIfNeeded();
+  if (!get('deviceKey')) throw new ApiError('This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
+  const j = await call('login', { userId, deviceKey: get('deviceKey') });
+  if (!saveLocal('session', { token: j.token, user: j.user, expiresAt: j.expiresAt })) throw new ApiError('Phone storage is full — cannot stay signed in. Free up space and try again.');
+  return j.user;
+}
+
 export async function login(pin) {
   await enrollIfNeeded();
   if (!get('deviceKey')) throw new ApiError(get('enrollErr') ? 'The setup link did not work: ' + get('enrollErr') : 'This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });

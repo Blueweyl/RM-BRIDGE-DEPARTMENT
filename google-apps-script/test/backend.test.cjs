@@ -46,6 +46,15 @@ ok('session row stored server-side', B.env.readAll_('Sessions').filter(x => x.us
 for (let i = 0; i < 5; i++) call({ action: 'login', pin: '1234', device: 'brute' });
 ok('after 5 wrong PINs the phone is locked, even with a correct PIN', /Too many/.test(call({ action: 'login', pin: '1111', device: 'brute' }).error || ''));
 ok('other phones unaffected by that lock', call({ action: 'login', pin: '1111', device: 'phoneA' }).ok);
+// ── Leadmen sign in by tapping their name (no PIN) ──────────────────────
+ok('name list refused without a set-up phone', B.raw({ action: 'crews' }).notSetUp === true);
+const crewList = B.raw({ action: 'crews', deviceKey: B.deviceKey('tapPhone') });
+ok('name list: every active leadman with their team, no admin, no PINs', crewList.ok && crewList.crews.length === 4 && crewList.crews.every(c => c.userId && c.name && c.team && !('pin' in c)) && !crewList.crews.some(c => c.userId === 'admin'), JSON.stringify(crewList));
+const tap = B.raw({ action: 'login', userId: crewList.crews.find(c => c.teamId === 'team2').userId, deviceKey: B.deviceKey('tapPhone') });
+ok('leadman signs in by tapping their name', tap.ok && tap.user.role === 'leadman' && tap.user.teamId === 'team2', JSON.stringify(tap));
+ok('tapping works even when the phone is locked by wrong PINs', B.raw({ action: 'login', userId: crewList.crews[0].userId, deviceKey: B.deviceKey('brute') }).ok);
+ok('admin cannot be signed in without a PIN', !B.raw({ action: 'login', userId: 'admin', deviceKey: B.deviceKey('tapPhone') }).ok);
+ok('tap sign-in needs a set-up phone', B.raw({ action: 'login', userId: crewList.crews[0].userId }).notSetUp === true);
 ok('changing the device name in the request does not dodge the lock', /Too many/.test(B.raw({ action: 'login', pin: '1111', deviceKey: B.deviceKey('brute'), device: 'other' }).error || ''));
 
 const T = { admin: admin.token, t2: lead2.token, t3: lead3.token };
@@ -68,7 +77,7 @@ ok('[3] stolen token without the phone\'s device key refused', r.auth === true);
 r = B.raw({ action: 'load', token: T.t2, deviceKey: B.deviceKey('someOtherPhone') });
 ok('[3] stolen token used with another enrolled phone\'s key refused', r.auth === true);
 ok('[3] stolen-token attempt written to the audit log', B.env.readAll_('AuditLog').some(a => a.action === 'DENIED session used from another device' && a.user === 'Glenn Butiong'));
-ok('sessions are short: leadman 72 h, admin 8 h', Math.abs(lead2.expiresAt - Date.now() - 72 * 3600e3) < 60e3 && Math.abs(admin.expiresAt - Date.now() - 8 * 3600e3) < 60e3);
+ok('sign in once: leadman stays signed in a year, admin a month', Math.abs(lead2.expiresAt - Date.now() - 365 * 24 * 3600e3) < 60e3 && Math.abs(admin.expiresAt - Date.now() - 30 * 24 * 3600e3) < 60e3);
 
 // ── [1] forged teamId / [2] leadman calling admin endpoints ─────────────
 let L = call({ action: 'load', token: T.t2 });
@@ -103,7 +112,8 @@ ok('attendance saved', r.ok && r.crewPresent === '7/9' && r.rev === '1' && /^R\d
 const reportId = r.reportId;
 ok('[4] same attendance request replayed → no second write', call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: attReq }).replay === true
   && B.env.row_('DailyReports', 'team2|' + today).rev === '1');
-ok('[11] stale revision refused (another device saved first)', call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: uid() }).conflict === true);
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: uid() });
+ok('[11] stale revision never locks the user (another device saved first, save goes through)', r.ok && !r.conflict, JSON.stringify(r));
 ok('[9] future date refused', /future/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2099-01-01', people, baseRev: '0' }).error));
 ok('[9] impossible date refused', /bad date/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2026-02-30', people, baseRev: '0' }).error));
 ok('[9] old date locked for leadman', /locked/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: B.env.shiftDate_(today, -3), people, baseRev: '0' }).error));
@@ -164,7 +174,6 @@ bad('unknown unit refused', { unit: 'Miles' }, /unit/);
 bad('manpower above attendance needs remarks', { actualManpower: '9', remarks: '' }, /more than present/);
 ok('[9] Ongoing without remarks refused', submit({ ...form, status: 'Ongoing', remarks: '' }).missing.some(m => /Ongoing/.test(m)));
 ok('[9] actual below target without remarks refused', submit({ ...form, status: 'Ongoing', target: '3', actual: '1', remarks: '' }).missing.some(m => /below target/.test(m)));
-ok('photo IDs must match the server (tampered IDs refused)', submit({ ...form, status: 'Ongoing', remarks: 'x' }, { beforePhotoId: 'ph-forged' }).conflict === true);
 
 const cAfter = uid();
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, originalFilename: 'IMG_0002.jpg', clientId: cAfter });
@@ -200,14 +209,15 @@ ok('other leadman cannot see team2', call({ action: 'load', token: T.t3 }).repor
 // ── [13] Reopen rules ───────────────────────────────────────────────────
 ok('[13] other leadman cannot reopen team2', call({ action: 'reopenReport', token: T.t3, teamId: 'team2', reportDate: today, reason: 'x', baseRev: repAfter.rev }).denied === true);
 ok('[13] reopen needs a reason', /reason/.test(call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, baseRev: repAfter.rev }).error));
-ok('[13] reopen with stale revision refused', call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'wrong location', baseRev: '0' }).conflict === true);
-r = call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'Wrong location typed', baseRev: repAfter.rev, requestId: uid() });
+r = call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'Wrong location typed', baseRev: '0', requestId: uid() });
+ok('[13] reopen with a stale revision still goes through (never locks the user)', r.ok && !r.conflict, JSON.stringify(r));
 ok('reopen with reason', r.ok && B.env.row_('DailyReports', 'team2|' + today).state === 'draft' && B.env.row_('DailyReports', 'team2|' + today).reopenReason === 'Wrong location typed');
 ok('reopen keeps a snapshot of the submitted version', B.env.readAll_('Revisions').some(v => v.kind === 'reopened' && v.reason === 'Wrong location typed' && JSON.parse(v.snapshot).location === form.location));
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, originalFilename: 'IMG_0003.jpg', clientId: uid() });
 const after2 = r.photo.photoId;
-r = submit({ ...form, location: 'Km.12' }, { afterPhotoId: after2 });
-ok('resubmit bumps version', r.ok && r.version === '2', JSON.stringify(r));
+r = submit({ ...form, location: 'Km.12' }, { afterPhotoId: afterId, baseRev: '0' });
+ok('resubmit bumps version (stale revision and an older photo ID never lock the user)', r.ok && r.version === '2', JSON.stringify(r));
+ok('report uses the newest photo on the server; the mismatch is audited', B.env.row_('DailyReports', 'team2|' + today).afterPhotoId === after2 && B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT photos') && B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT submit'));
 const last = B.env.readAll_('AuditLog').filter(a => a.action.startsWith('report resubmitted')).pop();
 ok('report audit carries user ID and the new revision', last && last.userId === 'lead-team2' && last.rev === B.env.row_('DailyReports', 'team2|' + today).rev && /Reopened because: Wrong location typed/.test(last.reason), last && JSON.stringify(last));
 const reo = B.env.readAll_('AuditLog').filter(a => a.action === 'report reopened for editing').pop();

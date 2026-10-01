@@ -65,7 +65,12 @@ async function device(viewport, timezoneId = 'Asia/Manila') {
 }
 const text = page => page.evaluate(() => document.body.innerText);
 const click = (page, label, exact = true) => page.getByRole('button', { name: label, exact }).first().click();
-const pin = async (page, p) => { for (const d of p) await page.click(`button[aria-label="Digit ${d}"]`); };
+// PINs are for the admin; the keypad sits behind "Admin? Sign in with PIN" (leadmen tap their name).
+const pin = async (page, p) => {
+  if (!(await page.locator('button[aria-label="Digit 1"]').count())) await page.getByRole('button', { name: 'Admin? Sign in with PIN' }).click();
+  for (const d of p) await page.click(`button[aria-label="Digit ${d}"]`);
+};
+const loginScreen = page => page.waitForFunction(() => /Tap your name|Enter your 4-digit PIN/.test(document.body.innerText), null, { timeout: 8000 });
 const waitText = (page, t, timeout = 8000) => page.waitForFunction(x => document.body.innerText.includes(x), t, { timeout }).then(() => true, () => false);
 const photoFile = async (page, label, name) => {
   const buf = await page.evaluate(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 240; const g = c.getContext('2d'); g.fillStyle = '#E8760F'; g.fillRect(0, 0, 320, 240); const b = await new Promise(r => c.toBlob(r, 'image/jpeg')); return [...new Uint8Array(await b.arrayBuffer())]; });
@@ -116,21 +121,21 @@ try {
   // ── Leadman phone ───────────────────────────────────────────────────────
   const X = await device({ width: 390, height: 844 });
   await X.page.goto(APP + '?backend=' + encodeURIComponent(BACKEND));
-  await X.page.waitForSelector('button[aria-label="Digit 1"]');
+  await loginScreen(X.page);
   await pin(X.page, '2222');
   ok('phone without setup link cannot sign in', await waitText(X.page, 'not set up yet'));
   await X.ctx.close();
 
   const L = await device({ width: 390, height: 844 });
   await L.page.goto(SETUP());
-  await L.page.waitForSelector('button[aria-label="Digit 1"]');
+  await loginScreen(L.page);
   ok('setup link removed from address bar', !L.page.url().includes('backend=') && !L.page.url().includes('key='));
   await L.page.waitForFunction(() => !!localStorage.getItem('bnlex.live.deviceKey'), null, { timeout: 5000 }).catch(() => {});
   ok('setup key exchanged for a device key, then deleted from the phone', !!(await ls(L.page, 'bnlex.live.deviceKey')) && !(await ls(L.page, 'bnlex.live.key')));
   const usedLink = lastLink;
   const RL = await device({ width: 390, height: 844 });
   await RL.page.goto(APP + '?backend=' + encodeURIComponent(BACKEND) + '&key=' + usedLink);
-  await RL.page.waitForSelector('button[aria-label="Digit 1"]');
+  await loginScreen(RL.page);
   ok('[P3] a setup link already used by another phone is refused (single use)', await waitText(RL.page, 'already used') && !(await ls(RL.page, 'bnlex.live.deviceKey')));
   await pin(RL.page, '2222');
   ok('[P3] …and that phone cannot sign in; the PIN screen shows why (not a generic message)', await waitText(RL.page, 'The setup link did not work: This setup link was already used'));
@@ -138,11 +143,19 @@ try {
   ok('no prototype screen bar in live mode', await L.page.locator('nav').count() === 0);
   ok('no demo PINs shown in live mode', !(await text(L.page)).includes('Demo PINs'));
 
+  // Leadmen do not need a PIN: they tap their name on a phone set up with the admin's link.
+  const TN = await device({ width: 390, height: 844 });
+  await TN.page.goto(SETUP());
+  ok('sign-in screen lists names to tap, no keypad', await waitText(TN.page, 'Tap your name') && await waitText(TN.page, 'Pijay Tanjeco') && await TN.page.locator('button[aria-label="Digit 1"]').count() === 0);
+  await TN.page.getByRole('button', { name: /Sign in as Pijay Tanjeco/ }).click();
+  ok('tapping a name opens that team straight away (no PIN)', await waitText(TN.page, 'Leadman · Bridge RM_Team 1', 10000), (await text(TN.page)).slice(0, 400));
+  await TN.ctx.close();
+
   await pin(L.page, '9999');
   ok('wrong PIN rejected by server', await waitText(L.page, 'Wrong PIN'));
   await L.page.waitForTimeout(1000);
   await pin(L.page, '2222');
-  ok('PIN 2222 accepted by server → Glenn Butiong', await waitText(L.page, 'Glenn Butiong') && (await text(L.page)).includes('PIN accepted'));
+  ok('PIN 2222 accepted by server → Glenn Butiong', await waitText(L.page, 'Glenn Butiong') && (await text(L.page)).includes('Signed in'));
   await click(L.page, "Start today's report");
   ok('opens Segment 10 screen', await waitText(L.page, 'Leadman · Segment 10 Scupper Drain'), (await text(L.page)).slice(0, 600) + ' ERR ' + L.page.errors.join(' / '));
   await L.page.waitForTimeout(500);
@@ -170,7 +183,7 @@ try {
   ok('attendance saved to Sheet', await waitText(L.page, 'Attendance submitted at') && B.env.readAll_('Attendance').filter(a => a.teamId === 'team2').length === 9);
   ok('statuses and note stored', B.env.readAll_('Attendance').find(a => a.name === 'Abraham Balmeo').status === 'Leave' && B.env.readAll_('Attendance').find(a => a.name === 'Rolando Faustino').note === 'Medical check-up');
 
-  // [11] Second phone for the same team saves first; this phone's stale update is refused, its marks kept.
+  // [11] Second phone for the same team saves first; this phone's later update still goes through (newest save wins, never locked) and is audited.
   const L2 = await signIn('2222', 'Segment 10 Scupper Drain');
   await L2.page.getByRole('tab', { name: /Attendance/ }).click();
   await L2.page.click('button[aria-label="Mark Abraham Balmeo present"]');
@@ -182,14 +195,14 @@ try {
   await L.page.locator('[aria-label="Reason for Ian Enriquez"]').getByRole('button', { name: 'Sick', exact: true }).click();
   L.page.onDialog = d => d.accept('Ian went home sick');
   await click(L.page, 'Update attendance');
-  ok('[11] stale phone: Conflict state shown, server copy not overwritten', await waitText(L.page, 'Attendance: Conflict — NOT saved') && report().crewPresent === '8/9' && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Present');
-  ok('[11] header chip shows Conflict', (await text(L.page)).includes('Conflict'));
+  ok('[11] stale phone is not locked: its update is saved (newest wins), no Conflict', await waitText(L.page, 'Attendance submitted and saved') && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Sick' && !(await text(L.page)).includes('Conflict — NOT saved'));
+  ok('[11] the overwrite is in the audit log for the admin', B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT attendance'));
   await L.page.waitForTimeout(600);
-  ok('[11] unsent marks kept on the stale phone', await L.page.locator('button[aria-label="Mark Ian Enriquez not present"][aria-pressed="true"]').count() === 1);
   await L.page.click('button[aria-label="Mark Ian Enriquez present"]');
   await L.page.click('button[aria-label="Mark Abraham Balmeo present"]');
+  L.page.onDialog = d => d.accept('Both on site after all');
   await click(L.page, 'Update attendance');
-  ok('resubmit after refresh accepted (same as server → no new revision)', await waitText(L.page, 'Attendance unchanged') && report().crewPresent === '8/9' && !(await text(L.page)).includes('Conflict'));
+  ok('next update from the same phone accepted', await waitText(L.page, 'Attendance submitted and saved') && await (async () => { for (let i = 0; i < 20 && report().crewPresent !== '8/9'; i++) await L.page.waitForTimeout(200); return report().crewPresent === '8/9'; })() && !(await text(L.page)).includes('Conflict'));
   L.page.onDialog = null;
   await L2.ctx.close();
 
@@ -406,7 +419,7 @@ try {
   B.env.upsert_('Sessions', g4sid, { expiresAt: String(Date.now() - 1000) });
   await G4.ctx.setOffline(false);
   await G4.page.evaluate(() => window.dispatchEvent(new Event('online')));
-  ok('[3] expired session: phone asks for the PIN, queued change kept', await waitText(G4.page, 'Enter your 4-digit PIN', 10000) && (await ls(G4.page, 'bnlex.live.outbox') || '').includes('att|team4'));
+  ok('[3] expired session: phone asks for the PIN, queued change kept', await waitText(G4.page, 'Tap your name', 10000) && (await ls(G4.page, 'bnlex.live.outbox') || '').includes('att|team4'));
   await pin(G4.page, '4444');
   await waitText(G4.page, "Start today's report");
   await click(G4.page, "Start today's report");
@@ -474,7 +487,7 @@ try {
   Z.page.onDialog = d => d.accept();
   await click(Z.page, 'Log out');
   await Z.ctx.setOffline(false);
-  await waitText(Z.page, 'Enter your 4-digit PIN');
+  await waitText(Z.page, 'Tap your name');
   await pin(Z.page, '0000');
   ok('another user signs in on the same phone: clear warning about the first user\'s unsent work', await waitText(Z.page, 'This phone holds 1 unsent report/attendance record from Pijay Tanjeco (Bridge RM_Team 1)'));
   await click(Z.page, 'Open command center');
@@ -482,7 +495,7 @@ try {
   ok('…and it is NOT sent with the other user\'s sign-in', B.env.readAll_('Attendance').find(a => a.name === 'Joven Blanza').status === 'Sick' && (await ls(Z.page, 'bnlex.live.outbox') || '').includes('att|team1'));
   Z.page.onDialog = d => d.accept();
   await click(Z.page, 'Log out');
-  await waitText(Z.page, 'Enter your 4-digit PIN');
+  await waitText(Z.page, 'Tap your name');
   await pin(Z.page, '1111');
   await waitText(Z.page, "Start today's report");
   await click(Z.page, "Start today's report");
@@ -526,11 +539,11 @@ try {
   // ── Sign out ────────────────────────────────────────────────────────────
   const tok = JSON.parse(await ls(L.page, 'bnlex.live.session')).token, lDk = JSON.parse(await ls(L.page, 'bnlex.live.deviceKey'));
   await click(L.page, 'Log out');
-  ok('logout returns to PIN screen', await waitText(L.page, 'Enter your 4-digit PIN'));
+  ok('logout returns to the sign-in screen', await waitText(L.page, 'Tap your name'));
   await L.page.waitForTimeout(300);
   ok('logout revoked the session on the server', B.raw({ action: 'load', token: tok, deviceKey: lDk }).auth === true);
   await L.page.reload();
-  ok('logged out stays logged out after reload', await waitText(L.page, 'Enter your 4-digit PIN'));
+  ok('logged out stays logged out after reload', await waitText(L.page, 'Tap your name'));
 
   for (const d of [L, A, E, G4]) ok('no page errors', d.page.errors.length === 0, d.page.errors.join(' | '));
 } catch (e) {

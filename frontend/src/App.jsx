@@ -433,7 +433,7 @@ export default class Component extends React.Component {
       photos: `${r.photos}/${r.photosNeeded}`, photosOk: r.photos >= r.photosNeeded,
       version: r.version !== '0' ? `v${r.version} · rev ${r.rev}` : r.rev && r.rev !== '0' ? `rev ${r.rev}` : '—', location: r.location || '—',
       flags: [
-        r.conflicts ? { label: `Conflict ×${r.conflicts}`, title: 'Writes refused because another device changed the report first', style: chip('#FBE0DD', '#A8261B') } : null,
+        r.conflicts ? { label: `Conflict ×${r.conflicts}`, title: 'Saves made over a newer change from another device (newest wins, see the audit log)', style: chip('#FBE0DD', '#A8261B') } : null,
         r.onPhone && r.onPhone.length ? { label: 'On phone, not synced', title: r.onPhone.join('; ') + (r.onPhoneAt ? ' (as of ' + r.onPhoneAt + ')' : ''), style: chip('#FDEBD3', '#8A4B00') } : null,
         r.reopened ? { label: 'Reopened', title: 'Reopened for editing, not resubmitted yet', style: chip('#E3E9F2', '#2B4A73') } : null,
         r.revisions ? { label: `${r.revisions} revision${r.revisions === 1 ? '' : 's'}`, title: 'Saved snapshots (see History)', style: chip('#EEF1F4', '#33404F') } : null,
@@ -482,8 +482,13 @@ export default class Component extends React.Component {
       style: k === '' ? 'visibility:hidden;' : `min-height:60px;background:#F2F4F7;border:1px solid #DDE2E8;border-radius:12px;font-family:Archivo,sans-serif;font-weight:700;color:#0F2540;cursor:pointer;font-size:${k === 'del' ? '14px' : '24px'};`,
     }));
     const dots = [0, 1, 2, 3].map(i => ({ style: `width:18px;height:18px;border-radius:50%;border:2.5px solid ${s.pinError ? '#C62828' : '#0F2540'};background:${s.pin.length > i ? (s.pinError ? '#C62828' : '#0F2540') : 'transparent'};` }));
-    const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && (this.live ? this.liveProceed() : this.setState({ screen: s.user.screen })), reset: () => { if (this.live) api.clearSession(); this.setState({ user: null, pin: '' }); },
-      message: s.pinError ? null : s.loginMsg, checking: s.busy === 'login', demoPins: this.demo && DEMO.Pins ? React.createElement(DEMO.Pins) : null };
+    const login = { entering: !s.user, confirmed: !!s.user, error: s.pinError, keys, dots, user: s.user || {}, proceed: () => s.user && (this.live ? this.liveProceed() : this.setState({ screen: s.user.screen })), reset: () => { if (this.live) { api.clearSession(); if (!s.crewList) this.liveLoadCrews(); } this.setState({ user: null, pin: '', showPin: false }); },
+      message: s.pinError ? null : s.loginMsg, checking: s.busy === 'login', demoPins: this.demo && DEMO.Pins ? React.createElement(DEMO.Pins) : null,
+      // Live: leadmen tap their name (no PIN); the admin uses a PIN.
+      pickName: this.live && !s.user && !s.showPin, crews: (s.crewList || []).map(c => ({ key: c.userId, team: c.team, name: c.name, go: () => this.liveLoginAs(c.userId) })),
+      crewsMsg: s.crewsMsg, crewsLoading: this.live && !s.crewList && !s.crewsMsg, signingIn: s.busy === 'login',
+      usePin: () => this.setState({ showPin: true, pin: '', pinError: false, loginMsg: null }),
+      useNames: this.live ? () => { this.setState({ showPin: false, pin: '', pinError: false, loginMsg: null }); if (!s.crewList) this.liveLoadCrews(); } : null };
 
     const statuses = {}; T.forEach(t => { statuses[t.id] = this.teamStatus(t.id, s); });
     const submittedN = T.filter(t => statuses[t.id] === 'submitted').length;

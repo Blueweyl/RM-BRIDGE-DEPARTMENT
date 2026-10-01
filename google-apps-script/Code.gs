@@ -33,7 +33,8 @@ function db_() {
 }
 // Sessions are short and bound to the phone that signed in. Work queued offline is kept on the phone
 // and sent after the next sign-in, so a short leadman session never loses data.
-var SESSION_HOURS = { leadman: 72, admin: 8 };
+// Leadmen tap their name once and stay signed in (a year); the admin signs in with a PIN once a month.
+var SESSION_HOURS = { leadman: 24 * 365, admin: 24 * 30 };
 var ENROLL_HOURS = 24;                                  // a setup link connects ONE phone, once, within this time
 var MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 var LOGIN_LIMITS = { perDevice: 5, global: 20, minutes: 15 };
@@ -434,6 +435,7 @@ function doPost(e) {
 var ACTIONS = {
   enroll:         { run: enroll_, public: true, writes: true },
   login:          { run: login_, public: true, writes: true },
+  crews:          { run: crews_, public: true },
   logout:         { run: logout_, writes: true },
   me:             { run: function (s) { return { ok: true, user: s.user }; } },
   load:           { run: load_ },
@@ -539,12 +541,20 @@ function deviceRevoked_(deviceId) {
 function login_(_, req) {
   var dk = unsign_(req.deviceKey, 'DEVICE_SECRET');
   if (!dk || !dk.d) return { ok: false, error: 'This phone is not set up yet. Open the setup link from your admin.', notSetUp: true };
-  loginGate_(dk.d);
   if (deviceRevoked_(dk.d)) {
     REQ.device = dk.d;
     audit_({ name: 'disconnected phone', role: 'device' }, '', 'DENIED sign-in from disconnected phone', 'device', dk.d, null, null, '');
     return { ok: false, error: 'This phone was disconnected by the admin. Ask for a new setup link.', notSetUp: true };
   }
+  // Leadmen sign in by tapping their name on a phone set up with the admin's link (no PIN to remember).
+  if (req.userId) {
+    var lead = row_('Users', String(req.userId));
+    if (!lead || lead.role !== 'leadman' || lead.active === 'No') return { ok: false, error: 'Name not found. Ask the admin to check the Users tab.' };
+    var lt = row_('Teams', lead.teamId);
+    if (!lt || lt.active === 'No') return { ok: false, error: 'This team is not active. Ask the admin.' };
+    return startSession_(lead, dk.d);
+  }
+  loginGate_(dk.d);
   var pin = String(req.pin || '');
   normalizePins_();
   var matches = /^\d{4}$/.test(pin) ? readAll_('Users').filter(function (u) { return u.active !== 'No' && u.pin === pinHash_(u.userId, pin); }) : [];
@@ -556,6 +566,24 @@ function login_(_, req) {
     return { ok: false, error: 'Wrong PIN. Please try again.', wrongPin: true };
   }
   CacheService.getScriptCache().remove('fail:d:' + dk.d);
+  return startSession_(u, dk.d);
+}
+
+/** Leadmen a phone can sign in as by tapping their name. Only for phones set up with the admin's link. */
+function crews_(_, req) {
+  var dk = unsign_(req.deviceKey, 'DEVICE_SECRET');
+  if (!dk || !dk.d) return { ok: false, error: 'This phone is not set up yet. Open the setup link from your admin.', notSetUp: true };
+  if (deviceRevoked_(dk.d)) return { ok: false, error: 'This phone was disconnected by the admin. Ask for a new setup link.', notSetUp: true };
+  var teams = {};
+  readAll_('Teams').forEach(function (t) { if (t.active !== 'No') teams[t.teamId] = t; });
+  var list = readAll_('Users').filter(function (u) { return u.role === 'leadman' && u.active !== 'No' && teams[u.teamId]; })
+    .map(function (u) { return { userId: u.userId, name: u.name, teamId: u.teamId, team: teams[u.teamId].name, short: teams[u.teamId].short || '' }; })
+    .sort(function (a, b) { return a.team.localeCompare(b.team); });
+  return { ok: true, crews: list };
+}
+
+function startSession_(u, device) {
+  var dk = { d: device };
   var user = userFor_(u), now = now_();
   var exp = Date.now() + (SESSION_HOURS[u.role] || 12) * 3600000;
   var sid = 'ses-' + Utilities.getUuid();
@@ -724,14 +752,14 @@ function validDate_(d) {
 }
 
 /**
- * Optimistic concurrency: the app sends the revision it last saw. A mismatch means another device
- * (or the admin) changed the report since; nothing is overwritten and the refusal is audited.
+ * The app sends the revision it last saw. A mismatch means another device (or the admin) saved
+ * this report since. The save still goes through (newest save wins), so nobody is ever locked out;
+ * the mismatch is written to the audit log so the admin can see what was overwritten.
  */
 function needRev_(s, rep, baseRev, action) {
   var cur = rep ? String(rep.rev || '0') : '0', sent = String(baseRev == null ? '' : baseRev);
   if (sent !== cur) {
-    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Refused: changed on another device', cur);
-    throw new Error('CONFLICT: This report was changed on another device. Your entries are kept on this phone — check them and submit again.');
+    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Changed on another device first; saved anyway (newest save wins)', cur);
   }
 }
 
@@ -1181,8 +1209,10 @@ function submitReport_(s, req) {
   if (errs.length) return { ok: false, error: 'Cannot submit yet: ' + errs.join('; '), missing: errs };
   // The phone names each photo by the server ID, or (queued offline) by its own photo ID.
   var same = function (p, id, cid) { return p ? (String(id || '') === p.photoId || (!!cid && String(cid) === p.clientId)) : !id && !cid; };
+  // Photos replaced on another device: the report uses the photos the server holds now (the newest), and the admin can see it in the audit log.
   if (!same(before, req.beforePhotoId, req.beforeClientId) || !same(after, req.afterPhotoId, req.afterClientId)) {
-    throw new Error('CONFLICT: The photos on this report changed on another device. Check the photos and submit again.');
+    audit_(s.user, teamId, 'CONFLICT photos', 'report', old.reportId, { phoneBefore: String(req.beforePhotoId || req.beforeClientId || ''), phoneAfter: String(req.afterPhotoId || req.afterClientId || '') },
+      { before: before.photoId, after: after ? after.photoId : '' }, 'Photos changed on another device; submitted with the newest photos', old.rev);
   }
 
   var now = now_();

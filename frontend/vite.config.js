@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Relative base so the built site works from any folder or static host (e.g. GitHub Pages).
-// __DEMO__ is a build-time constant: the demo (fixed PINs, sample crews) is only compiled into
+// __DEMO__ is a build-time constant: the demo (pretend office, sample crews) is only compiled into
 // `npm run dev` and `npm run build:demo`. The production build (`npm run build`) does not contain it.
 export default defineConfig(({ command, mode }) => ({
   base: './',

@@ -1,27 +1,23 @@
-// Client for the Google Apps Script backend (google-apps-script/Code.gs).
+// Talks to the Google Apps Script backend (google-apps-script/Code.gs) and keeps small values on the phone.
 //
-// "Live" mode is on when a backend URL is configured, either at build time
-// (VITE_BACKEND_URL in frontend/.env) or once per phone with a setup link:
-//   https://<app address>/?backend=<Apps Script web app URL>&key=<single-use setup link token>
-// The link (from the backend's showSetupLink(), one per phone) is never built into the app. It is
-// exchanged once for a signed per-phone device key and then deleted from the phone.
-// Without a backend URL the app runs as the offline demo (browser storage only).
+// The backend's address comes from the build (VITE_BACKEND_URL) or, once per phone, from the app link
+// the office shares (Sheet menu → Daily Report → Show the app link):
+//   https://<app address>/?backend=<Apps Script web app URL>
+// There is no sign-in. Demo builds (`npm run dev`, `npm run build:demo`) without a backend use demo.js.
+import { demoCall } from './demo.js';
 
+/* global __DEMO__ */
+const DEMO_BUILD = __DEMO__;
 const P = 'bnlex.live.';
 // Apps Script web app URL (personal accounts: /macros/s/…/exec; Google Workspace: /a/macros/<domain>/s/…/exec).
 const URL_RE = /^https:\/\/script\.google\.com\/(a\/macros\/[\w.-]+\/|macros\/)s\/[\w-]+\/exec$/;
 
-function get(k) {
-  let v = null;
-  try { v = localStorage.getItem(P + k); } catch (e) { return null; }
-  if (!v) return null;
-  try { return JSON.parse(v); } catch (e) { quarantine(P + k, v); return null; }
-}
+/** Keys found damaged since the app started (a copy is kept; the app shows a warning). */
+export const quarantined = [];
 
 /**
- * Saved data that cannot be read is never silently thrown away or turned into an empty record:
- * a copy is kept under "bnlex.quarantine" (last 5) for recovery, and the app loads the server copy.
- * Returns false when even the copy could not be kept (phone storage full).
+ * Saved data that cannot be read is never silently thrown away: a copy is kept under
+ * "bnlex.quarantine" (last 5) for recovery. Returns false when even the copy could not be kept.
  */
 export function quarantine(key, raw) {
   try {
@@ -31,32 +27,62 @@ export function quarantine(key, raw) {
     localStorage.setItem('bnlex.quarantine', JSON.stringify(list.slice(-5)));
     quarantined.push(key);
     return true;
-  } catch (e) { quarantined.push(key + ' (copy NOT kept: storage full)'); return false; }
+  } catch (e) { quarantined.push(key); return false; }
 }
-/** Keys found damaged since the app started (for the warning shown to the user). */
-export const quarantined = [];
-function put(k, v) { try { if (v == null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, JSON.stringify(v)); } catch (e) {} }
 
-/** Store a backend URL passed as ?backend=… (setup link), then remove it from the address bar. */
-export function captureSetupLink() {
+/** A small JSON value saved on the phone (null when missing or damaged). */
+export function loadLocal(k) {
+  let v = null;
+  try { v = localStorage.getItem(P + k); } catch (e) { return null; }
+  if (!v) return null;
+  try { return JSON.parse(v); } catch (e) { quarantine(P + k, v); try { localStorage.removeItem(P + k); } catch (x) {} return null; }
+}
+/** Save (or with null, remove) a small JSON value. Returns false when the phone's storage is full. */
+export function saveLocal(k, v) {
+  try { if (v == null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, JSON.stringify(v)); return true; } catch (e) { return false; }
+}
+/** Every saved key starting with `prefix` (without the app prefix). */
+export function localKeys(prefix) {
+  const out = [];
+  try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(P + prefix)) out.push(k.slice(P.length)); } } catch (e) {}
+  return out;
+}
+
+/** Store a backend URL passed as ?backend=… (the app link), then remove it from the address bar. */
+export function captureAppLink() {
   try {
     const q = new URLSearchParams(window.location.search);
-    const b = q.get('backend'), k = q.get('key');
-    if (b === 'off') { put('url', null); put('session', null); put('key', null); put('deviceKey', null); }
-    else if (b && URL_RE.test(b)) { put('url', b); if (k) put('key', k); }
-    else if (k && /^[a-z0-9]{8,64}$/i.test(k)) { put('key', k); }
-    else return;
-    q.delete('backend'); q.delete('key');
+    const b = q.get('backend');
+    if (!b && !q.has('key')) return;
+    if (b === 'off') saveLocal('url', null);
+    else if (b && URL_RE.test(b)) saveLocal('url', b);
+    q.delete('backend'); q.delete('key');           // `key` was the old one-time setup key: no longer used
     const rest = q.toString();
     window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash);
   } catch (e) {}
 }
 
+/**
+ * The old version signed people in and kept a separate queue. Its sign-in data is removed; an unsent
+ * queue is kept as a copy for the office (returns true so the app can say so once).
+ */
+export function cleanUpOldVersion() {
+  ['session', 'deviceKey', 'key', 'enrollId', 'enrollErr', 'reqs', 'base', 'failedPhotos'].forEach(k => saveLocal(k, null));
+  let oldQueue = false;
+  try {
+    const raw = localStorage.getItem(P + 'outbox');
+    if (raw && raw !== '{}' && /"(att|act)\|/.test(raw)) { quarantine(P + 'outbox', raw); oldQueue = true; }
+    if (raw && /"(att|act)\|/.test(raw)) localStorage.removeItem(P + 'outbox');
+  } catch (e) {}
+  return oldQueue;
+}
+
 export function backendUrl() {
-  const u = get('url') || (import.meta.env && import.meta.env.VITE_BACKEND_URL) || '';
+  const u = loadLocal('url') || (import.meta.env && import.meta.env.VITE_BACKEND_URL) || '';
   return URL_RE.test(u) ? u : '';
 }
-export function isLive() { return !!backendUrl(); }
+/** True when the app can reach a backend (or is the demo build). */
+export function isConnected() { return !!backendUrl() || DEMO_BUILD; }
 
 /** Random ID for idempotent requests and photos (retries reuse the same ID). */
 export function uuid() {
@@ -65,45 +91,24 @@ export function uuid() {
   return [...b].map((x, i) => ([4, 6, 8, 10].includes(i) ? '-' : '') + x.toString(16).padStart(2, '0')).join('');
 }
 
-/**
- * A phone opened with a setup link swaps it for its own device key, then forgets the link. Links work once:
- * the phone's random enrolment ID lets it retry after a lost reply and still get its key.
- */
-export async function enrollIfNeeded() {
-  const k = get('key');
-  if (!k || get('deviceKey') || !isLive()) return;
-  let eid = get('enrollId');
-  if (!eid || eid.k !== k) { eid = { k, id: uuid() }; put('enrollId', eid); }
-  let j;
-  try { j = await call('enroll', { setupKey: k, enrollId: eid.id, deviceLabel: (navigator.userAgent || '').slice(0, 60) }); }
-  // A bad/used/expired link is not retried on every start; its reason is kept to show at sign-in.
-  catch (e) { if (e.notSetUp) { put('key', null); put('enrollId', null); put('enrollErr', e.message); } throw e; }
-  put('deviceKey', j.deviceKey);
-  put('key', null); put('enrollId', null); put('enrollErr', null);
+/** A random label for this phone, kept on it. Not a password: it only shows in the audit log which phone sent what. */
+export function deviceId() {
+  let d = loadLocal('device');
+  if (typeof d !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(d)) { d = 'ph-' + uuid().slice(0, 18); saveLocal('device', d); }
+  return d;
 }
-export function hasDevice() { return !!(get('deviceKey') || get('key')); }
-
-/** The saved sign-in, or null. A damaged or edited copy is treated as signed out (the server decides anyway). */
-export function session() {
-  const s = get('session');
-  const valid = s && typeof s === 'object' && typeof s.token === 'string' && typeof s.expiresAt === 'number' && s.user && typeof s.user === 'object' && typeof s.user.role === 'string';
-  return valid && s.expiresAt > nowMs() ? s : null;   // server-corrected clock: a wrong phone clock neither ends nor extends it
-}
-export function clearSession() { put('session', null); }
-export function setSessionUser(user) { const s = session(); if (s) put('session', { ...s, user }); }
 
 export function online() { return typeof navigator === 'undefined' || navigator.onLine !== false; }
 
 // ── Time ─────────────────────────────────────────────────────────────────
-// Operational dates and times are always Manila time, whatever time zone the phone is set to, and
-// corrected by the server clock (the phone clock can be wrong). Audit times are stamped by the server.
+// Report dates and times are Manila time, whatever time zone the phone is set to, and corrected by
+// the server clock (the phone clock can be wrong).
 export const TZ = 'Asia/Manila';
-let skew = Number(get('skew')) || 0;
-/** Remember how far the phone clock is from the server clock (sent with every load and sign-in). */
+let skew = Number(loadLocal('skew')) || 0;
 export function setServerTime(ms) {
   if (typeof ms !== 'number' || !isFinite(ms)) return;
   const next = ms - Date.now();
-  if (Math.abs(next - skew) > 2000) { skew = next; put('skew', skew); }
+  if (Math.abs(next - skew) > 2000) { skew = next; saveLocal('skew', skew); }
 }
 export function clockSkew() { return skew; }
 export function nowMs() { return Date.now() + skew; }
@@ -120,9 +125,17 @@ export function manilaStamp(ms = nowMs()) { const p = mnlParts(ms); return `${p.
 /** "3:42 PM" in Manila. */
 export function manilaTime(ms = nowMs()) { return new Date(ms).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }); }
 /** Format a calendar date ("2026-09-28") without letting the phone's time zone shift it. */
-export function fmtDay(iso, opts) {
+export function fmtDay(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) {
   const [y, m, d] = String(iso).split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
+}
+export function shiftDay(iso, days) { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10); }
+/** "2026-09-27 15:42:10" → "3:42 PM" */
+export function timeOf(stamp) {
+  const m = /(\d{2}):(\d{2})/.exec(String(stamp || '').slice(11));
+  if (!m) return stamp ? String(stamp) : '';
+  const h = Number(m[1]);
+  return (h % 12 || 12) + ':' + m[2] + ' ' + (h < 12 ? 'AM' : 'PM');
 }
 
 export class ApiError extends Error {
@@ -130,80 +143,27 @@ export class ApiError extends Error {
 }
 
 /**
- * POST one action. Throws ApiError with .offline, .auth, .wrongPin, .conflict or .missing set when relevant.
- * navigator.onLine is only a hint: a phone can report "online" with no route to Google, so every
- * failure to get a proper JSON answer is treated as "not confirmed" and the caller keeps its data.
+ * POST one action. Throws ApiError; `.offline` means nothing was confirmed (no signal, timeout, odd reply),
+ * so the caller keeps its data and tries again later. Other errors carry the server's plain-language message.
  */
 export async function call(action, data = {}, { timeout = 45000 } = {}) {
-  if (!online()) throw new ApiError('No signal. Nothing was sent.', { offline: true, notSent: true });
-  const s = session();
+  const body = { ...data, action, deviceId: deviceId() };
+  if (DEMO_BUILD && !backendUrl()) return demoCall(body);
+  if (!backendUrl()) throw new ApiError('This phone is not connected to the office yet. Open the app link from the office once.', { notConnected: true });
+  if (!online()) throw new ApiError('No signal.', { offline: true, notSent: true });
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   let res;
   try {
     // text/plain keeps this a "simple" CORS request, which Apps Script web apps accept.
-    res = await fetch(backendUrl(), {
-      method: 'POST', redirect: 'follow', signal: ctl.signal,
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      // The token only works together with this phone's device key (sessions are device-bound).
-      body: JSON.stringify({ ...data, action, token: s ? s.token : undefined, deviceKey: data.deviceKey || (s ? get('deviceKey') || undefined : undefined) }),
-    });
+    res = await fetch(backendUrl(), { method: 'POST', redirect: 'follow', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
   } catch (e) {
-    throw new ApiError(e && e.name === 'AbortError' ? 'Google did not answer in time. Nothing was confirmed — try again.' : 'Cannot reach the server. Check your signal and try again.', { offline: true });
+    throw new ApiError(e && e.name === 'AbortError' ? 'The office did not answer in time.' : 'Could not reach the office.', { offline: true });
   } finally { clearTimeout(timer); }
   let j;
-  try { j = await res.json(); } catch (e) { throw new ApiError('Unexpected reply from the server (' + res.status + '). Nothing was confirmed — try again.', { offline: true }); }
-  if (!j || typeof j !== 'object') throw new ApiError('Unexpected reply from the server. Nothing was confirmed — try again.', { offline: true });
+  try { j = await res.json(); } catch (e) { throw new ApiError('Could not reach the office.', { offline: true }); }
+  if (!j || typeof j !== 'object') throw new ApiError('Could not reach the office.', { offline: true });
   if (j.serverTime) setServerTime(j.serverTime);
-  if (!j.ok) {
-    if (j.auth) clearSession();
-    if (j.notSetUp) put('deviceKey', null);
-    throw new ApiError(j.error || 'Request failed', { auth: !!j.auth, wrongPin: !!j.wrongPin, notSetUp: !!j.notSetUp, missing: j.missing, conflict: !!j.conflict, denied: !!j.denied, retry: !!j.retry, needReason: !!j.needReason });
-  }
+  if (!j.ok) throw new ApiError(j.error || 'Something went wrong.', { offline: !!j.retry, missing: j.missing, alreadySubmitted: !!j.alreadySubmitted, rosterChanged: !!j.rosterChanged, answer: j });
   return j;
 }
-
-/** Leadmen this phone can sign in as by tapping a name (phone must be set up with the admin's link). */
-export async function crews() {
-  await enrollIfNeeded();
-  if (!get('deviceKey')) throw new ApiError(get('enrollErr') ? 'The setup link did not work: ' + get('enrollErr') : 'This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
-  return (await call('crews', { deviceKey: get('deviceKey') })).crews || [];
-}
-
-/** Sign in as a leadman by tapping their name (no PIN). */
-export async function loginAs(userId) {
-  await enrollIfNeeded();
-  if (!get('deviceKey')) throw new ApiError('This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
-  const j = await call('login', { userId, deviceKey: get('deviceKey') });
-  if (!saveLocal('session', { token: j.token, user: j.user, expiresAt: j.expiresAt })) throw new ApiError('Phone storage is full — cannot stay signed in. Free up space and try again.');
-  return j.user;
-}
-
-export async function login(pin) {
-  await enrollIfNeeded();
-  if (!get('deviceKey')) throw new ApiError(get('enrollErr') ? 'The setup link did not work: ' + get('enrollErr') : 'This phone is not set up yet. Open the setup link from your admin.', { notSetUp: true });
-  const j = await call('login', { pin, deviceKey: get('deviceKey') });
-  if (!saveLocal('session', { token: j.token, user: j.user, expiresAt: j.expiresAt })) throw new ApiError('Phone storage is full — cannot stay signed in. Free up space and try again.');
-  return j.user;
-}
-
-/** "2026-09-27 15:42:10" → "3:42 PM" */
-export function timeOf(stamp) {
-  const m = /(\d{2}):(\d{2})/.exec(String(stamp || '').slice(11));
-  if (!m) return stamp ? String(stamp) : null;
-  const h = Number(m[1]);
-  return (h % 12 || 12) + ':' + m[2] + ' ' + (h < 12 ? 'AM' : 'PM');
-}
-
-/** Sign out here and on the server (best effort: the local session is cleared either way). */
-export async function logout() {
-  const s = session();
-  clearSession();
-  if (s && online()) { try { await fetch(backendUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: s.token, deviceKey: get('deviceKey') }) }); } catch (e) {} }
-}
-
-/** Small JSON values in localStorage (drafts, outbox). Returns false when the phone's storage is full. */
-export function saveLocal(k, v) {
-  try { if (v == null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, JSON.stringify(v)); return true; } catch (e) { return false; }
-}
-export function loadLocal(k) { return get(k); }

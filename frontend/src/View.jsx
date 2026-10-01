@@ -71,7 +71,25 @@ function Login({ v }) {
         </div>
 
         <div style={css('background:#FFFFFF;border-radius:16px;padding:26px 22px;box-shadow:0 20px 50px rgba(0,0,0,0.35);')}>
-          {login.entering && (
+          {login.entering && login.pickName && (
+            <div style={css('display:flex;flex-direction:column;gap:12px;')}>
+              <div style={css('text-align:center;')}>
+                <div style={css("font-family:'Archivo',sans-serif;font-weight:800;font-size:22px;color:#0F2540;")}>Tap your name</div>
+                <div style={css('font-size:14px;color:#5B6472;margin-top:4px;')}>{v.todayLong}</div>
+              </div>
+              {(login.crewsLoading || login.signingIn) && <div role="status" style={css('font-size:15px;font-weight:700;color:#2B4A73;text-align:center;')}>{login.signingIn ? 'Opening…' : 'Loading names…'}</div>}
+              {login.crewsMsg && <div role="alert" style={css('background:#FBE0DD;color:#A8261B;font-weight:700;font-size:15px;padding:10px 14px;border-radius:8px;text-align:center;')}>{login.crewsMsg}</div>}
+              {login.crews.map(c => (
+                <button key={c.key} onClick={c.go} disabled={login.signingIn} aria-label={'Sign in as ' + c.name + ', ' + c.team}
+                  style={css("width:100%;min-height:72px;background:#F2F4F7;border:2px solid #DDE2E8;border-radius:12px;padding:12px 16px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:2px;")}>
+                  <span style={css("font-family:'Archivo',sans-serif;font-weight:800;font-size:19px;color:#0F2540;")}>{c.name}</span>
+                  <span style={css('font-size:15px;font-weight:600;color:#5B6472;')}>{c.team}</span>
+                </button>
+              ))}
+              <button onClick={login.usePin} style={css('background:none;border:none;color:#2B4A73;font-size:14px;font-weight:700;text-decoration:underline;cursor:pointer;min-height:44px;')}>Admin? Sign in with PIN</button>
+            </div>
+          )}
+          {login.entering && !login.pickName && (
             <div style={css('display:flex;flex-direction:column;align-items:center;gap:18px;')}>
               <div style={css('text-align:center;')}>
                 <div style={css("font-family:'Archivo',sans-serif;font-weight:800;font-size:20px;color:#0F2540;")}>Enter your 4-digit PIN</div>
@@ -90,13 +108,14 @@ function Login({ v }) {
               <div style={css('display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%;')}>
                 {login.keys.map((k, i) => <button key={i} onClick={k.press} aria-label={k.aria} style={css(k.style)}>{k.label}</button>)}
               </div>
+              {login.useNames && <button onClick={login.useNames} style={css('background:none;border:none;color:#2B4A73;font-size:14px;font-weight:700;text-decoration:underline;cursor:pointer;min-height:44px;')}>Leadman? Tap your name instead</button>}
             </div>
           )}
           {login.confirmed && (
             <div style={css('display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;')}>
               <div style={css("width:72px;height:72px;border-radius:50%;background:#0F2540;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-weight:800;font-size:26px;")}>{login.user.initials}</div>
               <div>
-                <div style={css('font-size:14px;color:#17693F;font-weight:700;')}>✓ PIN accepted</div>
+                <div style={css('font-size:14px;color:#17693F;font-weight:700;')}>✓ Signed in</div>
                 <div style={css("font-family:'Archivo',sans-serif;font-weight:800;font-size:22px;color:#0F2540;margin-top:4px;")}>{login.user.name}</div>
               </div>
               <div style={css('display:flex;flex-direction:column;gap:6px;width:100%;background:#F2F4F7;border-radius:10px;padding:12px 14px;text-align:left;')}>
@@ -105,7 +124,7 @@ function Login({ v }) {
                 <div style={css('display:flex;justify-content:space-between;gap:10px;font-size:14px;')}><span style={css('color:#5B6472;')}>Date</span><span style={css('font-weight:700;')}>{v.todayLong}</span></div>
               </div>
               <button onClick={login.proceed} style={css("width:100%;min-height:56px;background:#E8760F;color:#FFFFFF;border:none;border-radius:10px;font-family:'Archivo',sans-serif;font-weight:800;font-size:17px;cursor:pointer;")}>{login.user.cta}</button>
-              <button onClick={login.reset} style={css('background:none;border:none;color:#2B4A73;font-size:14px;font-weight:700;text-decoration:underline;cursor:pointer;min-height:44px;')}>Not you? Enter a different PIN</button>
+              <button onClick={login.reset} style={css('background:none;border:none;color:#2B4A73;font-size:14px;font-weight:700;text-decoration:underline;cursor:pointer;min-height:44px;')}>Not you? Go back</button>
             </div>
           )}
         </div>

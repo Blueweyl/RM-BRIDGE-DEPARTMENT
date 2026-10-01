@@ -434,6 +434,7 @@ function doPost(e) {
 var ACTIONS = {
   enroll:         { run: enroll_, public: true, writes: true },
   login:          { run: login_, public: true, writes: true },
+  crews:          { run: crews_, public: true },
   logout:         { run: logout_, writes: true },
   me:             { run: function (s) { return { ok: true, user: s.user }; } },
   load:           { run: load_ },
@@ -539,12 +540,20 @@ function deviceRevoked_(deviceId) {
 function login_(_, req) {
   var dk = unsign_(req.deviceKey, 'DEVICE_SECRET');
   if (!dk || !dk.d) return { ok: false, error: 'This phone is not set up yet. Open the setup link from your admin.', notSetUp: true };
-  loginGate_(dk.d);
   if (deviceRevoked_(dk.d)) {
     REQ.device = dk.d;
     audit_({ name: 'disconnected phone', role: 'device' }, '', 'DENIED sign-in from disconnected phone', 'device', dk.d, null, null, '');
     return { ok: false, error: 'This phone was disconnected by the admin. Ask for a new setup link.', notSetUp: true };
   }
+  // Leadmen sign in by tapping their name on a phone set up with the admin's link (no PIN to remember).
+  if (req.userId) {
+    var lead = row_('Users', String(req.userId));
+    if (!lead || lead.role !== 'leadman' || lead.active === 'No') return { ok: false, error: 'Name not found. Ask the admin to check the Users tab.' };
+    var lt = row_('Teams', lead.teamId);
+    if (!lt || lt.active === 'No') return { ok: false, error: 'This team is not active. Ask the admin.' };
+    return startSession_(lead, dk.d);
+  }
+  loginGate_(dk.d);
   var pin = String(req.pin || '');
   normalizePins_();
   var matches = /^\d{4}$/.test(pin) ? readAll_('Users').filter(function (u) { return u.active !== 'No' && u.pin === pinHash_(u.userId, pin); }) : [];
@@ -556,6 +565,24 @@ function login_(_, req) {
     return { ok: false, error: 'Wrong PIN. Please try again.', wrongPin: true };
   }
   CacheService.getScriptCache().remove('fail:d:' + dk.d);
+  return startSession_(u, dk.d);
+}
+
+/** Leadmen a phone can sign in as by tapping their name. Only for phones set up with the admin's link. */
+function crews_(_, req) {
+  var dk = unsign_(req.deviceKey, 'DEVICE_SECRET');
+  if (!dk || !dk.d) return { ok: false, error: 'This phone is not set up yet. Open the setup link from your admin.', notSetUp: true };
+  if (deviceRevoked_(dk.d)) return { ok: false, error: 'This phone was disconnected by the admin. Ask for a new setup link.', notSetUp: true };
+  var teams = {};
+  readAll_('Teams').forEach(function (t) { if (t.active !== 'No') teams[t.teamId] = t; });
+  var list = readAll_('Users').filter(function (u) { return u.role === 'leadman' && u.active !== 'No' && teams[u.teamId]; })
+    .map(function (u) { return { userId: u.userId, name: u.name, teamId: u.teamId, team: teams[u.teamId].name, short: teams[u.teamId].short || '' }; })
+    .sort(function (a, b) { return a.team.localeCompare(b.team); });
+  return { ok: true, crews: list };
+}
+
+function startSession_(u, device) {
+  var dk = { d: device };
   var user = userFor_(u), now = now_();
   var exp = Date.now() + (SESSION_HOURS[u.role] || 12) * 3600000;
   var sid = 'ses-' + Utilities.getUuid();

@@ -48,6 +48,7 @@ export const liveMethods = {
   },
 
   liveMount() {
+    if (!api.session()) this.liveLoadCrews();
     this._reqs = api.loadLocal('reqs') || {};
     this._failedPhotos = api.loadLocal('failedPhotos') || {};
     this._sending = {};
@@ -499,6 +500,29 @@ export const liveMethods = {
     }
   },
 
+  /** Names to tap on the sign-in screen (leadmen don't need a PIN). */
+  async liveLoadCrews() {
+    if (!api.online()) { this.setState({ crewsMsg: 'No signal. Signing in needs signal.' }); return; }
+    try { const list = await api.crews(); this.setState({ crewList: list, crewsMsg: list.length ? null : 'No leadmen found. Ask the admin.' }); }
+    catch (e) { this.setState({ crewList: null, crewsMsg: e.message }); }
+  },
+
+  async liveLoginAs(userId) {
+    if (this.state.busy) return;
+    if (!api.online()) { this.setState({ crewsMsg: 'No signal. Signing in needs signal.' }); return; }
+    this.setState({ busy: 'login', crewsMsg: null });
+    try {
+      const u = await api.loginAs(userId);
+      if (u.role === 'leadman' && !this.constructor.T.some(t => t.id === u.teamId)) {
+        this.setState(s => this.useTeams(s, [{ teamId: u.teamId, name: u.team, short: u.short, leadman: u.name }]));
+      }
+      const lu = this.liveUser(u);
+      this.setState({ user: lu, busy: null, screen: lu.screen });
+      this.scanForeign();
+      this.refresh(true);
+    } catch (e) { this.setState({ busy: null, crewsMsg: e.message }); }
+  },
+
   async livePress(pin) {
     if (!api.online()) { this.setState({ pin: '', loginMsg: 'No signal. Signing in needs signal.' }); return; }
     this.setState({ pin, busy: 'login', loginMsg: null });
@@ -528,7 +552,8 @@ export const liveMethods = {
     const queued = Object.values(this._ob || {}).filter(it => this.mine(it)).length;
     if ((waiting || queued) && !window.confirm(`${queued ? queued + ' report/attendance record(s) not confirmed by the server yet' : 'Some photos have not uploaded yet'}. They stay on this phone and send after you sign in again. Log out?`)) return;
     api.logout();
-    this.setState({ screen: 'login', user: null, pin: '', pinError: false, loginMsg: null });
+    this.setState({ screen: 'login', user: null, pin: '', pinError: false, loginMsg: null, showPin: false });
+    this.liveLoadCrews();
   },
 
   async liveSubmitAtt(id) {

@@ -46,6 +46,15 @@ ok('session row stored server-side', B.env.readAll_('Sessions').filter(x => x.us
 for (let i = 0; i < 5; i++) call({ action: 'login', pin: '1234', device: 'brute' });
 ok('after 5 wrong PINs the phone is locked, even with a correct PIN', /Too many/.test(call({ action: 'login', pin: '1111', device: 'brute' }).error || ''));
 ok('other phones unaffected by that lock', call({ action: 'login', pin: '1111', device: 'phoneA' }).ok);
+// ── Leadmen sign in by tapping their name (no PIN) ──────────────────────
+ok('name list refused without a set-up phone', B.raw({ action: 'crews' }).notSetUp === true);
+const crewList = B.raw({ action: 'crews', deviceKey: B.deviceKey('tapPhone') });
+ok('name list: every active leadman with their team, no admin, no PINs', crewList.ok && crewList.crews.length === 4 && crewList.crews.every(c => c.userId && c.name && c.team && !('pin' in c)) && !crewList.crews.some(c => c.userId === 'admin'), JSON.stringify(crewList));
+const tap = B.raw({ action: 'login', userId: crewList.crews.find(c => c.teamId === 'team2').userId, deviceKey: B.deviceKey('tapPhone') });
+ok('leadman signs in by tapping their name', tap.ok && tap.user.role === 'leadman' && tap.user.teamId === 'team2', JSON.stringify(tap));
+ok('tapping works even when the phone is locked by wrong PINs', B.raw({ action: 'login', userId: crewList.crews[0].userId, deviceKey: B.deviceKey('brute') }).ok);
+ok('admin cannot be signed in without a PIN', !B.raw({ action: 'login', userId: 'admin', deviceKey: B.deviceKey('tapPhone') }).ok);
+ok('tap sign-in needs a set-up phone', B.raw({ action: 'login', userId: crewList.crews[0].userId }).notSetUp === true);
 ok('changing the device name in the request does not dodge the lock', /Too many/.test(B.raw({ action: 'login', pin: '1111', deviceKey: B.deviceKey('brute'), device: 'other' }).error || ''));
 
 const T = { admin: admin.token, t2: lead2.token, t3: lead3.token };

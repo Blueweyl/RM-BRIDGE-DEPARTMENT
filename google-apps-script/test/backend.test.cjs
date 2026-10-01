@@ -103,7 +103,8 @@ ok('attendance saved', r.ok && r.crewPresent === '7/9' && r.rev === '1' && /^R\d
 const reportId = r.reportId;
 ok('[4] same attendance request replayed → no second write', call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: attReq }).replay === true
   && B.env.row_('DailyReports', 'team2|' + today).rev === '1');
-ok('[11] stale revision refused (another device saved first)', call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: uid() }).conflict === true);
+r = call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: today, people, baseRev: '0', requestId: uid() });
+ok('[11] stale revision never locks the user (another device saved first, save goes through)', r.ok && !r.conflict, JSON.stringify(r));
 ok('[9] future date refused', /future/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2099-01-01', people, baseRev: '0' }).error));
 ok('[9] impossible date refused', /bad date/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: '2026-02-30', people, baseRev: '0' }).error));
 ok('[9] old date locked for leadman', /locked/.test(call({ action: 'saveAttendance', token: T.t2, teamId: 'team2', reportDate: B.env.shiftDate_(today, -3), people, baseRev: '0' }).error));
@@ -164,7 +165,6 @@ bad('unknown unit refused', { unit: 'Miles' }, /unit/);
 bad('manpower above attendance needs remarks', { actualManpower: '9', remarks: '' }, /more than present/);
 ok('[9] Ongoing without remarks refused', submit({ ...form, status: 'Ongoing', remarks: '' }).missing.some(m => /Ongoing/.test(m)));
 ok('[9] actual below target without remarks refused', submit({ ...form, status: 'Ongoing', target: '3', actual: '1', remarks: '' }).missing.some(m => /below target/.test(m)));
-ok('photo IDs must match the server (tampered IDs refused)', submit({ ...form, status: 'Ongoing', remarks: 'x' }, { beforePhotoId: 'ph-forged' }).conflict === true);
 
 const cAfter = uid();
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, originalFilename: 'IMG_0002.jpg', clientId: cAfter });
@@ -200,14 +200,15 @@ ok('other leadman cannot see team2', call({ action: 'load', token: T.t3 }).repor
 // ── [13] Reopen rules ───────────────────────────────────────────────────
 ok('[13] other leadman cannot reopen team2', call({ action: 'reopenReport', token: T.t3, teamId: 'team2', reportDate: today, reason: 'x', baseRev: repAfter.rev }).denied === true);
 ok('[13] reopen needs a reason', /reason/.test(call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, baseRev: repAfter.rev }).error));
-ok('[13] reopen with stale revision refused', call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'wrong location', baseRev: '0' }).conflict === true);
-r = call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'Wrong location typed', baseRev: repAfter.rev, requestId: uid() });
+r = call({ action: 'reopenReport', token: T.t2, teamId: 'team2', reportDate: today, reason: 'Wrong location typed', baseRev: '0', requestId: uid() });
+ok('[13] reopen with a stale revision still goes through (never locks the user)', r.ok && !r.conflict, JSON.stringify(r));
 ok('reopen with reason', r.ok && B.env.row_('DailyReports', 'team2|' + today).state === 'draft' && B.env.row_('DailyReports', 'team2|' + today).reopenReason === 'Wrong location typed');
 ok('reopen keeps a snapshot of the submitted version', B.env.readAll_('Revisions').some(v => v.kind === 'reopened' && v.reason === 'Wrong location typed' && JSON.parse(v.snapshot).location === form.location));
 r = call({ action: 'uploadPhoto', token: T.t2, teamId: 'team2', reportDate: today, type: 'after', dataUrl: img, originalFilename: 'IMG_0003.jpg', clientId: uid() });
 const after2 = r.photo.photoId;
-r = submit({ ...form, location: 'Km.12' }, { afterPhotoId: after2 });
-ok('resubmit bumps version', r.ok && r.version === '2', JSON.stringify(r));
+r = submit({ ...form, location: 'Km.12' }, { afterPhotoId: afterId, baseRev: '0' });
+ok('resubmit bumps version (stale revision and an older photo ID never lock the user)', r.ok && r.version === '2', JSON.stringify(r));
+ok('report uses the newest photo on the server; the mismatch is audited', B.env.row_('DailyReports', 'team2|' + today).afterPhotoId === after2 && B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT photos') && B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT submit'));
 const last = B.env.readAll_('AuditLog').filter(a => a.action.startsWith('report resubmitted')).pop();
 ok('report audit carries user ID and the new revision', last && last.userId === 'lead-team2' && last.rev === B.env.row_('DailyReports', 'team2|' + today).rev && /Reopened because: Wrong location typed/.test(last.reason), last && JSON.stringify(last));
 const reo = B.env.readAll_('AuditLog').filter(a => a.action === 'report reopened for editing').pop();

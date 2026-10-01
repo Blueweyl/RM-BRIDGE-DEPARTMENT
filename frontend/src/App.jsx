@@ -433,7 +433,7 @@ export default class Component extends React.Component {
       photos: `${r.photos}/${r.photosNeeded}`, photosOk: r.photos >= r.photosNeeded,
       version: r.version !== '0' ? `v${r.version} · rev ${r.rev}` : r.rev && r.rev !== '0' ? `rev ${r.rev}` : '—', location: r.location || '—',
       flags: [
-        r.conflicts ? { label: `Conflict ×${r.conflicts}`, title: 'Writes refused because another device changed the report first', style: chip('#FBE0DD', '#A8261B') } : null,
+        r.conflicts ? { label: `Conflict ×${r.conflicts}`, title: 'Saves made over a newer change from another device (newest wins, see the audit log)', style: chip('#FBE0DD', '#A8261B') } : null,
         r.onPhone && r.onPhone.length ? { label: 'On phone, not synced', title: r.onPhone.join('; ') + (r.onPhoneAt ? ' (as of ' + r.onPhoneAt + ')' : ''), style: chip('#FDEBD3', '#8A4B00') } : null,
         r.reopened ? { label: 'Reopened', title: 'Reopened for editing, not resubmitted yet', style: chip('#E3E9F2', '#2B4A73') } : null,
         r.revisions ? { label: `${r.revisions} revision${r.revisions === 1 ? '' : 's'}`, title: 'Saved snapshots (see History)', style: chip('#EEF1F4', '#33404F') } : null,

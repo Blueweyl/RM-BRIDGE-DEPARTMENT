@@ -724,14 +724,14 @@ function validDate_(d) {
 }
 
 /**
- * Optimistic concurrency: the app sends the revision it last saw. A mismatch means another device
- * (or the admin) changed the report since; nothing is overwritten and the refusal is audited.
+ * The app sends the revision it last saw. A mismatch means another device (or the admin) saved
+ * this report since. The save still goes through (newest save wins), so nobody is ever locked out;
+ * the mismatch is written to the audit log so the admin can see what was overwritten.
  */
 function needRev_(s, rep, baseRev, action) {
   var cur = rep ? String(rep.rev || '0') : '0', sent = String(baseRev == null ? '' : baseRev);
   if (sent !== cur) {
-    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Refused: changed on another device', cur);
-    throw new Error('CONFLICT: This report was changed on another device. Your entries are kept on this phone — check them and submit again.');
+    audit_(s.user, rep ? rep.teamId : '', 'CONFLICT ' + action, 'report', rep ? rep.reportId : '', { serverRev: cur }, { phoneRev: sent }, 'Changed on another device first; saved anyway (newest save wins)', cur);
   }
 }
 
@@ -1181,8 +1181,10 @@ function submitReport_(s, req) {
   if (errs.length) return { ok: false, error: 'Cannot submit yet: ' + errs.join('; '), missing: errs };
   // The phone names each photo by the server ID, or (queued offline) by its own photo ID.
   var same = function (p, id, cid) { return p ? (String(id || '') === p.photoId || (!!cid && String(cid) === p.clientId)) : !id && !cid; };
+  // Photos replaced on another device: the report uses the photos the server holds now (the newest), and the admin can see it in the audit log.
   if (!same(before, req.beforePhotoId, req.beforeClientId) || !same(after, req.afterPhotoId, req.afterClientId)) {
-    throw new Error('CONFLICT: The photos on this report changed on another device. Check the photos and submit again.');
+    audit_(s.user, teamId, 'CONFLICT photos', 'report', old.reportId, { phoneBefore: String(req.beforePhotoId || req.beforeClientId || ''), phoneAfter: String(req.afterPhotoId || req.afterClientId || '') },
+      { before: before.photoId, after: after ? after.photoId : '' }, 'Photos changed on another device; submitted with the newest photos', old.rev);
   }
 
   var now = now_();

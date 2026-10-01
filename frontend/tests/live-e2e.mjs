@@ -170,7 +170,7 @@ try {
   ok('attendance saved to Sheet', await waitText(L.page, 'Attendance submitted at') && B.env.readAll_('Attendance').filter(a => a.teamId === 'team2').length === 9);
   ok('statuses and note stored', B.env.readAll_('Attendance').find(a => a.name === 'Abraham Balmeo').status === 'Leave' && B.env.readAll_('Attendance').find(a => a.name === 'Rolando Faustino').note === 'Medical check-up');
 
-  // [11] Second phone for the same team saves first; this phone's stale update is refused, its marks kept.
+  // [11] Second phone for the same team saves first; this phone's later update still goes through (newest save wins, never locked) and is audited.
   const L2 = await signIn('2222', 'Segment 10 Scupper Drain');
   await L2.page.getByRole('tab', { name: /Attendance/ }).click();
   await L2.page.click('button[aria-label="Mark Abraham Balmeo present"]');
@@ -182,14 +182,14 @@ try {
   await L.page.locator('[aria-label="Reason for Ian Enriquez"]').getByRole('button', { name: 'Sick', exact: true }).click();
   L.page.onDialog = d => d.accept('Ian went home sick');
   await click(L.page, 'Update attendance');
-  ok('[11] stale phone: Conflict state shown, server copy not overwritten', await waitText(L.page, 'Attendance: Conflict — NOT saved') && report().crewPresent === '8/9' && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Present');
-  ok('[11] header chip shows Conflict', (await text(L.page)).includes('Conflict'));
+  ok('[11] stale phone is not locked: its update is saved (newest wins), no Conflict', await waitText(L.page, 'Attendance submitted and saved') && B.env.readAll_('Attendance').find(a => a.name === 'Ian Enriquez').status === 'Sick' && !(await text(L.page)).includes('Conflict — NOT saved'));
+  ok('[11] the overwrite is in the audit log for the admin', B.env.readAll_('AuditLog').some(a => a.action === 'CONFLICT attendance'));
   await L.page.waitForTimeout(600);
-  ok('[11] unsent marks kept on the stale phone', await L.page.locator('button[aria-label="Mark Ian Enriquez not present"][aria-pressed="true"]').count() === 1);
   await L.page.click('button[aria-label="Mark Ian Enriquez present"]');
   await L.page.click('button[aria-label="Mark Abraham Balmeo present"]');
+  L.page.onDialog = d => d.accept('Both on site after all');
   await click(L.page, 'Update attendance');
-  ok('resubmit after refresh accepted (same as server → no new revision)', await waitText(L.page, 'Attendance unchanged') && report().crewPresent === '8/9' && !(await text(L.page)).includes('Conflict'));
+  ok('next update from the same phone accepted', await waitText(L.page, 'Attendance submitted and saved') && await (async () => { for (let i = 0; i < 20 && report().crewPresent !== '8/9'; i++) await L.page.waitForTimeout(200); return report().crewPresent === '8/9'; })() && !(await text(L.page)).includes('Conflict'));
   L.page.onDialog = null;
   await L2.ctx.close();
 

@@ -6,6 +6,9 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # The Google Apps Script Web app URL (Deploy → Manage deployments, ends in /exec). Built into the app,
+  # so anyone who opens the site can use it with no per-phone setup. Not a secret: the Sheet checks every report.
+  # VITE_BACKEND_URL = "https://script.google.com/macros/s/…/exec"   (fill in, then remove the #)
 
 # The service worker must always be re-checked so phones get updates.
 [[headers]]

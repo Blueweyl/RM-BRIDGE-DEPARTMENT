@@ -278,7 +278,8 @@ function showAppLink() {
       'Fix: Deploy → Manage deployments → copy the Web app URL, paste it between the quotes of WEB_APP_URL at the top of Code.gs, save, then try again.');
     return '';
   }
-  say_('Open this link once on each phone (then "Add to Home screen"):\n\n' + a.link);
+  say_('The app: ' + APP_ADDRESS + '\nAnyone with that address can use it, once this Web app URL is built into the app:\n\n' +
+    String(WEB_APP_URL || ScriptApp.getService().getUrl()) + '\n\n(For a copy of the app hosted elsewhere, this link also works: ' + a.link + ')');
   return a.link;
 }
 

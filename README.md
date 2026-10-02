@@ -45,8 +45,7 @@ npm run perf           # speed check on a simulated slow Android phone (see docs
 | `src/templates.js` | Common work descriptions per team. |
 | `src/demo.js` | Demo builds only: a pretend office in the browser. Not in the production build. |
 
-The phone learns the backend address once from the app link (Sheet → **Daily Report → Show the app link**),
-or from `VITE_BACKEND_URL` at build time.
+The backend address is built in (`VITE_BACKEND_URL` in `netlify.toml`), so anyone with the app's address can use it.
 
 ## Backend (`google-apps-script/`)
 

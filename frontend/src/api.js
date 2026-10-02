@@ -1,8 +1,8 @@
 // Talks to the Google Apps Script backend (google-apps-script/Code.gs) and keeps small values on the phone.
 //
-// The backend's address comes from the build (VITE_BACKEND_URL) or, once per phone, from the app link
-// the office shares (Sheet menu → Daily Report → Show the app link):
-//   https://<app address>/?backend=<Apps Script web app URL>
+// The backend's address is built into the app (VITE_BACKEND_URL, set in netlify.toml), so anyone who opens
+// the app's plain address can use it: no per-phone setup. (An address passed once as ?backend=<URL> is
+// still accepted as a fallback, e.g. for a copy of the app hosted somewhere else.)
 // There is no sign-in. Demo builds (`npm run dev`, `npm run build:demo`) without a backend use demo.js.
 import { demoCall } from './demo.js';
 
@@ -78,7 +78,9 @@ export function cleanUpOldVersion() {
 }
 
 export function backendUrl() {
-  const u = loadLocal('url') || (import.meta.env && import.meta.env.VITE_BACKEND_URL) || '';
+  const built = (import.meta.env && import.meta.env.VITE_BACKEND_URL) || '';
+  if (URL_RE.test(built)) return built;
+  const u = loadLocal('url') || '';
   return URL_RE.test(u) ? u : '';
 }
 /** True when the app can reach a backend (or is the demo build). */
@@ -149,7 +151,7 @@ export class ApiError extends Error {
 export async function call(action, data = {}, { timeout = 45000 } = {}) {
   const body = { ...data, action, deviceId: deviceId() };
   if (DEMO_BUILD && !backendUrl()) return demoCall(body);
-  if (!backendUrl()) throw new ApiError('This phone is not connected to the office yet. Open the app link from the office once.', { notConnected: true });
+  if (!backendUrl()) throw new ApiError('The app is not set up yet. Tell the office.', { notConnected: true });
   if (!online()) throw new ApiError('No signal.', { offline: true, notSent: true });
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);

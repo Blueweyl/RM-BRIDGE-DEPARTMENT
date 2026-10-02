@@ -10,8 +10,10 @@ Everything is stored in that account's Google Sheet and Google Drive.
    (**Advanced → Go to … (unsafe) → Allow**: "unsafe" only means Google has not reviewed a script you wrote).
    The Sheet now has **Teams, Roster, Attendance, Reports, Photos, Audit** with the 4 teams and their crews.
 4. **Deploy → New deployment** → gear → **Web app**. **Execute as: Me**. **Who has access: Anyone**. **Deploy**.
-5. Reload the Sheet. Use the new **Daily Report** menu → **Show the app link**. Send that link to each leadman
-   once (Viber, Messenger, SMS). On the phone: open it → choose the team → browser menu → **Add to Home screen**.
+5. Copy the **Web app URL** (ends in `/exec`) and put it in `netlify.toml` as `VITE_BACKEND_URL`
+   (or send it to Claude), then publish the app. It is built into the app, so **anyone who opens
+   https://bridge-nlex-report.netlify.app/ can use it**: no per-phone setup. On the phone: open the address →
+   choose the team → browser menu → **Add to Home screen**.
 
 ## Upgrading an older version (with PINs)
 1. Open the Sheet → **Extensions → Apps Script**. Replace all of `Code.gs` with the new one, **Save**.
@@ -28,7 +30,7 @@ phone as a copy (the app says so); ask that leadman to send that day's report ag
 ## Day to day (Sheet → Daily Report menu)
 | Task | How |
 |---|---|
-| Connect a new phone | **Show the app link**, send it |
+| A new leadman | Send the app address https://bridge-nlex-report.netlify.app/ (**Show the app link** shows it) |
 | A leadman needs to fix a sent report | **Reopen a submitted report…** (today or yesterday, give a reason). They fix it and submit again; both versions are in **Audit** |
 | Export | **Export reports (Excel)…** (makes a file in the photo folder's *Exports* subfolder) |
 | Add a crew member | Type a new row in **Roster** (Team ID, Name, Role). It gets an ID the next time the app loads, or run **Give new Roster rows an ID** |

@@ -48,7 +48,7 @@ export function TeamPicker({ teams, loading, error, onPick, onRetry, connected, 
     <main className="page">
       <h1 className="h1">Choose your team</h1>
       <p className="hint">This phone remembers it. You can change it later.</p>
-      {!connected && <Banner tone="err" title="Not connected to the office yet">Open the app link from the office once on this phone.</Banner>}
+      {!connected && <Banner tone="err" title="The app is not set up yet">Tell the office.</Banner>}
       {connected && loading && !teams.length && <p className="hint" role="status">Loading teams…</p>}
       {connected && error && <Banner tone="err" title="Could not load the teams" action={onRetry} actionLabel="Try again">{error}</Banner>}
       <div className="list">

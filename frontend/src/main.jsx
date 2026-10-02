@@ -4,7 +4,7 @@ import App from './App.jsx';
 import { captureAppLink } from './api.js';
 import './index.css';
 
-// The app link from the office (?backend=<Apps Script URL>) connects this phone to the Google Sheet once.
+// Fallback: an address passed as ?backend=<Apps Script URL> is remembered (the built-in one wins).
 captureAppLink();
 
 /** Last line of defence: a crash never leaves a blank screen, and never deletes unsent work. */

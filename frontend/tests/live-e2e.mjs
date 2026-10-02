@@ -104,7 +104,7 @@ try {
   // ── No backend link yet ─────────────────────────────────────────────────
   const N = await phone();
   await N.page.goto(APP);
-  ok('a phone with no app link says it is not connected (no demo)', await waitText(N.page, 'Not connected to the office yet') && !(await text(N.page)).includes('Demo'));
+  ok('a build with no backend address says it is not set up (no demo)', await waitText(N.page, 'The app is not set up yet') && !(await text(N.page)).includes('Demo'));
   await N.ctx.close();
 
   // ── Phone L: team2, the whole flow ──────────────────────────────────────

@@ -101,7 +101,7 @@ words the app shows as they are.
 
 | Menu item | Function |
 |---|---|
-| Show the app link | `showAppLink()` → `https://bridge-nlex-report.netlify.app/?backend=<web app URL>` |
+| Show the app link | `showAppLink()`: the app address, and the Web app URL that is built into the app (`VITE_BACKEND_URL` in `netlify.toml`) |
 | Reopen a submitted report… | `reopenReport(teamId, date, reason)`: today or yesterday, reason required, audited with a snapshot |
 | Export reports (Excel)… | `exportReports(from, to)`: CSV + .xlsx in the *Exports* folder, formula-safe |
 | Give new Roster rows an ID | `tidyRoster_()` |

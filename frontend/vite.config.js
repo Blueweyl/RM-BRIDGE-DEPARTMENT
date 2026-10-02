@@ -33,6 +33,8 @@ export default defineConfig(({ command, mode }) => ({
         globIgnores: ['**/*-{cyrillic,cyrillic-ext,greek,greek-ext,vietnamese}-*'],
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
+        // Reload pages that still show an older version once the new one is installed (public/sw-reload.js).
+        importScripts: ['sw-reload.js'],
       },
     }),
   ],

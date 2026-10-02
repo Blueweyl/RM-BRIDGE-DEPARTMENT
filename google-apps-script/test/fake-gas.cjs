@@ -31,7 +31,7 @@ function makeBackend(opts = {}) {
     getRange(r, c, nr, nc) { return new Range(this, r, c, nr, nc); }
     getLastRow() { let n = this.data.length; while (n > 0 && !(this.data[n - 1] || []).some(v => cellStr(v) !== '')) n--; return n; }
     getMaxRows() { return this.maxRows; } insertRowsAfter(a, n) { this.maxRows += n; }
-    setFrozenRows() {} setColumnWidth() {} setRowHeight() {} hideColumns() {}
+    setFrozenRows() {} setColumnWidth() {} setRowHeight() {} hideColumns() {} hideSheet() { this.hidden = true; }
     deleteRow(r) { this.data.splice(r - 1, 1); }
     getLastColumn() { return Math.max(0, ...this.data.slice(0, this.getLastRow()).map(r => { let n = r.length; while (n > 0 && cellStr(r[n - 1]) === '') n--; return n; })); }
     clearContents() { this.data = []; return this; }
@@ -72,21 +72,19 @@ function makeBackend(opts = {}) {
   vm.createContext(env);
   vm.runInContext(fs.readFileSync(codePath, 'utf8'), env);
   const raw = body => JSON.parse(env.doPost({ postData: { contents: JSON.stringify(body) } }).s);
-  // Test helper: a login without a deviceKey enrols `body.device` once, with its own single-use setup link.
-  const devices = {};
+  // The field API has no sign-in: a submit only needs a request ID (a fresh one unless the test sets its own).
+  const call = body => raw(body.action === 'submitReport' && body.requestId === undefined ? { ...body, requestId: crypto.randomUUID() } : body);
+  // Older backend versions (used by the upgrade tests) had device setup links and sign-in tokens.
+  const devices = {}, tokenDevice = {};
   const deviceKey = name => devices[name] || (devices[name] = raw({ action: 'enroll', setupKey: env.newSetupLink_ ? env.newSetupLink_().token : props.SETUP_KEY, enrollId: 'test-' + name + '-0000', deviceLabel: name }).deviceKey);
-  // Test helper: a token is sent with the device key of the phone that signed in (as the app does),
-  // and writes that need one get a fresh request ID unless the test sets its own.
-  const tokenDevice = {};
-  const IDEM = ['saveAttendance', 'submitReport', 'reopenReport'];
-  const call = body => {
+  const legacyCall = body => {
     if (body.action === 'login' && body.deviceKey === undefined) body = { ...body, deviceKey: deviceKey(body.device || 'test') };
     else if (body.token && body.deviceKey === undefined && tokenDevice[body.token]) body = { ...body, deviceKey: tokenDevice[body.token] };
-    if (IDEM.includes(body.action) && body.requestId === undefined) body = { ...body, requestId: crypto.randomUUID() };
+    if (['saveAttendance', 'submitReport', 'reopenReport'].includes(body.action) && body.requestId === undefined) body = { ...body, requestId: crypto.randomUUID() };
     const out = raw(body);
     if (body.action === 'login' && out.ok) tokenDevice[out.token] = body.deviceKey;
     return out;
   };
-  return { env, sheets, files, props, cache, clock, call, raw, deviceKey, roots, exports: exports_, logs, service, writes };
+  return { env, sheets, files, props, cache, clock, call, raw, legacyCall, roots, exports: exports_, logs, service, writes };
 }
 module.exports = { makeBackend };

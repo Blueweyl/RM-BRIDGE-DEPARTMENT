@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // Relative base so the built site works from any folder or static host (e.g. GitHub Pages).
-// __DEMO__ is a build-time constant: the demo (fixed PINs, sample crews) is only compiled into
+// __DEMO__ is a build-time constant: the demo (pretend office, sample crews) is only compiled into
 // `npm run dev` and `npm run build:demo`. The production build (`npm run build`) does not contain it.
 export default defineConfig(({ command, mode }) => ({
   base: './',
@@ -33,6 +33,8 @@ export default defineConfig(({ command, mode }) => ({
         globIgnores: ['**/*-{cyrillic,cyrillic-ext,greek,greek-ext,vietnamese}-*'],
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
+        // Reload pages that still show an older version once the new one is installed (public/sw-reload.js).
+        importScripts: ['sw-reload.js'],
       },
     }),
   ],
